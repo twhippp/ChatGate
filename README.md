@@ -12,7 +12,6 @@ ChatGate is a customizable Twitch chat viewer and filter that helps you manage m
 - **Similarity Detection**: Blocks messages that are too similar to recent messages to prevent copy-paste spam.  
 - **Emote Density Cap**: Filters messages that are mostly emotes.  
 - **Filter State Indicator**: Displays `FILTER ACTIVE` or `FILTER OFF` with current messages per second (MPS).  
-- **Message Fade**: Older messages fade over time to reduce visual clutter.  
 - **Configurable Settings**: Set channel, font size, role bypass options, and MPS threshold.  
 - **No Authentication Needed**: Connects to Twitch chat via a random anonymous account.
 
