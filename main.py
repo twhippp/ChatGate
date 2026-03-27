@@ -30,7 +30,7 @@ except ImportError:
 
 # ===================== CONFIG =====================
 SETTINGS_FILE    = "settings.json"
-CURRENT_VERSION  = "1.0.0-beta"
+CURRENT_VERSION  = "0.3.0-beta"
 GITHUB_REPO      = "twhippp/ChatGate"
 WM_HOTKEY        = 0x0312
 HOTKEY_ID        = 1
