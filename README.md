@@ -1,43 +1,48 @@
 # ChatGate
-Dynamic Chat Gate for Twitch!
 
-ChatGate is a customizable Twitch chat viewer and filter that helps you manage messages in real-time. It filters spam, repeated messages, and low-value messages while allowing meaningful conversation to pass. It also provides role-based tags and adaptive filters to keep chat readable and manageable during fast streams.
+**Dynamic Transparent Overlay & Smart Filter for Twitch**
 
-## Features
+ChatGate is a high-performance, dual-window Twitch chat monitor designed for streamers. It features a transparent, click-through overlay that sits directly over your games, paired with a powerful controller to filter out spam and low-value messages in real-time.
 
-- **Role Tags**: Displays `[MOD]`, `[BROADCASTER]`, `[VIP]`, `[SUB]` tags with customizable colors.  
-- **Substantive Message Filter**: Blocks short or low-value messages while allowing full sentences and greetings.  
-- **Adaptive Minimum Length**: Automatically increases the required message length as chat activity rises.  
-- **Per-User Cooldown**: Suppresses repeated messages from the same user unless content changes.  
-- **Similarity Detection**: Blocks messages that are too similar to recent messages to prevent copy-paste spam.  
-- **Emote Density Cap**: Filters messages that are mostly emotes.  
-- **Filter State Indicator**: Displays `FILTER ACTIVE` or `FILTER OFF` with current messages per second (MPS).  
-- **Configurable Settings**: Set channel, font size, role bypass options, and MPS threshold.  
-- **No Authentication Needed**: Connects to Twitch chat via a random anonymous account.
+## Key Features
+
+  - **Dual-Window Architecture**: A dedicated **Controller** for settings and an **Invisible Overlay** for the game.
+  - **Click-Through Overlay**: The chat stays on top of your game but doesn't intercept mouse clicks!
+  - **Smart Logic Gate**: Automatically activates filters only when chat speed (MPS) exceeds your threshold.
+  - **Role Bypass**: Ensure `[MOD]`, `[VIP]`, and `[SUB]` messages always break through the filter, no matter how fast chat is moving.
+  - **Customizable Appearance**: Real-time sliders for background opacity, window width, and font scaling.
+  - **No-Auth Connection**: Connects anonymously to any Twitch channel
+  - **Global Hotkey**: Press `Ctrl+Shift+O` to instantly toggle the overlay visibility while in-game.
 
 ## Installation
 
-1. Download the latest **ChatGate.exe** from the Releases page.  
-2. Place the `.exe` anywhere on your computer.  
-3. Double-click `ChatGate.exe` to run. No Python installation is required.
-
-> Optional: You can save settings to the same folder as the `.exe`.  
+1.  **Download**: Grab the latest `ChatGate.exe` from the [Releases](https://github.com/twhippp/ChatGate/releases) page.
+2.  **Place**: Put the `.exe` in its own folder (it will create a `settings.json` file to remember your position).
+3.  **Run**: Double-click `ChatGate.exe`. No Python installation is required.
 
 ## Usage
 
-1. Enter the Twitch channel name you want to monitor.  
-2. Adjust **font size** and **messages per second (MPS) threshold** to control the filter activation.  
-3. Check/uncheck **role bypass options** to allow certain roles to bypass the filter.  
-4. Click **Connect** to start monitoring chat.  
-5. The chat window will display messages with role tags and filtered messages according to your settings.
+1.  **Connect**: Enter a Twitch channel and click **Connect**.
+2.  **Positioning**:
+      - Click **Unlock Overlay to Move**.
+      - A purple handle will appear on the chat window. Drag it to your preferred location.
+      - Click **Lock Overlay Position** to make it click-through and hide the handle.
+3.  **Filtering**: Adjust the **MPS Threshold**. If chat moves faster than this (Messages Per Second), the "Gate" closes and starts filtering.
+4.  **Visibility**: Use the **Opacity** slider to blend the chat into your game's UI.
 
+## Controls
+
+| Action | Control |
+| :--- | :--- |
+| **Toggle Overlay** | `Ctrl + Shift + O` |
+| **Move Chat** | Unlock via Controller -\> Drag Purple Bar |
+| **Adjust Size** | Width Slider in Controller |
 
 ## Notes
 
-ChatGate connects anonymously, so some private or subscriber-only messages may not appear.
-
-Designed for desktop use; works best with active Python environments.
+  * **Anonymous Mode**: Because ChatGate connects via `justinfan`, it cannot send messages or view "Sub-Only" chat modes if the streamer has strict privacy settings enabled.
+  * **Windows Only**: Currently optimized for Windows GDI+ and Win32 API for transparency stability. However, the program was tested on Bazzite (Fedora) and was fully functional under ProtonTricks!
 
 ## Contributing
 
-Contributions are welcome! Please open issues or submit pull requests for new features, bug fixes, or improvements.
+Got an idea for a better filter or a new UI theme? Feel free to open an issue or submit a pull request\!
