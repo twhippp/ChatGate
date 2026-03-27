@@ -378,7 +378,7 @@ class ChatGateMain(QWidget):
             "mps": 3.0, "opacity": 100,
             "mod": True, "vip": True, "sub": True, "yt_member": True,
             "pos_x": 100, "pos_y": 100, "width": 400, "height": 600,
-            "dark_mode": True, "font_size": 22
+            "dark_mode": True, "font_size": 22, "minimize_to_tray": True
         }
         if os.path.exists(SETTINGS_FILE):
             try:
@@ -404,6 +404,7 @@ class ChatGateMain(QWidget):
             "height":         self.overlay.height(),
             "dark_mode":      self.dark_mode,
             "font_size":      self.font_spin.value(),
+            "minimize_to_tray": self.minimize_to_tray_check.isChecked(),
         }
         with open(SETTINGS_FILE, "w") as f:
             json.dump(data, f, indent=4)
@@ -455,14 +456,24 @@ class ChatGateMain(QWidget):
         QApplication.quit()
 
     def closeEvent(self, event):
-        event.ignore()
-        self.hide()
-        self.tray.showMessage(
-            "ChatGate",
-            "Running in the background. Double-click the tray icon to restore.",
-            QSystemTrayIcon.Information,
-            2000
-        )
+        if self.minimize_to_tray_check.isChecked():
+            event.ignore()
+            self.hide()
+            self.tray.showMessage(
+                "ChatGate",
+                "Running in the background. Double-click the tray icon to restore.",
+                QSystemTrayIcon.Information,
+                2000
+            )
+        else:
+            self.overlay.hide()
+            self.tray.hide()
+            event.accept()
+
+    def quit_app(self):
+        self.overlay.hide()
+        self.tray.hide()
+        QApplication.quit()
 
     # ===================== WIN32 ICON =====================
     def _set_win32_icon(self):
@@ -494,13 +505,18 @@ class ChatGateMain(QWidget):
         header = QHBoxLayout()
         self.ver_label    = QLabel(f"v{CURRENT_VERSION}")
         self.mps_label    = QLabel("MPS: 0.0")
+        hotkey_label      = QLabel("Ctrl+Shift+O — Toggle Overlay")
+        hotkey_label.setStyleSheet("color: #666; font-size: 11px;")
         header.addWidget(self.ver_label)
+        header.addStretch()
+        header.addWidget(hotkey_label)
         header.addStretch()
         header.addWidget(self.mps_label)
         layout.addLayout(header)
 
         # ---- Platform tabs ----
-        tabs = QTabWidget()
+        self.tabs = QTabWidget()
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         # Twitch tab
         twitch_tab = QWidget()
@@ -566,9 +582,9 @@ class ChatGateMain(QWidget):
 
         yt_layout.addStretch()
 
-        tabs.addTab(twitch_tab, "Twitch")
-        tabs.addTab(yt_tab,     "YouTube")
-        layout.addWidget(tabs)
+        self.tabs.addTab(twitch_tab, "Twitch")
+        self.tabs.addTab(yt_tab,     "YouTube")
+        layout.addWidget(self.tabs)
 
         # ---- Shared overlay controls ----
         self.move_btn = QPushButton("UNLOCK OVERLAY TO MOVE")
@@ -598,11 +614,32 @@ class ChatGateMain(QWidget):
         row.addWidget(self.mps_spin)
         layout.addLayout(row)
 
+        self.minimize_to_tray_check = QCheckBox("Minimize to tray on close")
+        self.minimize_to_tray_check.setChecked(self.settings.get("minimize_to_tray", True))
+        self.minimize_to_tray_check.stateChanged.connect(self.save_settings)
+        layout.addWidget(self.minimize_to_tray_check)
+
         self.theme_btn = QPushButton("")
         self.theme_btn.clicked.connect(self.toggle_theme)
         layout.addWidget(self.theme_btn)
 
         layout.addStretch()
+
+    def _on_tab_changed(self, index):
+        """Switch accent color based on active platform tab."""
+        is_yt = index == 1
+        accent = "#FF0000" if is_yt else "#9146FF"
+        # Rebuild just the dynamic accent parts of the current theme
+        base = DARK_THEME if self.dark_mode else LIGHT_THEME
+        override = f"""
+            QPushButton {{ background-color: {accent}; color: white; font-weight: bold; padding: 10px; border-radius: 4px; }}
+            QSlider::handle:horizontal {{ background: {accent}; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }}
+            QTabBar::tab:selected {{ background: {accent}; color: white; }}
+            QMenu::item:selected {{ background-color: {accent}; }}
+        """
+        self.setStyleSheet(base + override)
+        # Keep MPS label color in sync when not filtering
+        self.mps_label.setProperty("accent", accent)
 
     # ===================== OVERLAY SYNC =====================
     def sync_overlay(self):
@@ -720,30 +757,68 @@ class ChatGateMain(QWidget):
             self.overlay.set_click_through(True)
 
     def _update_stats(self, mps, filtering):
+        accent = "#FF0000" if self.tabs.currentIndex() == 1 else "#9146FF"
         self.mps_label.setText(f"MPS: {mps:.1f}")
         self.mps_label.setStyleSheet(
-            f"color: {'#ff4444' if filtering else '#9146FF'}; font-weight: bold;")
+            f"color: {'#ff4444' if filtering else accent}; font-weight: bold;")
 
     # ===================== UPDATE CHECK =====================
     def check_for_updates(self):
         try:
-            url = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
-            req = urllib.request.Request(
-                url, headers={'User-Agent': 'Mozilla/5.0 (ChatGate-Updater)'})
-            with urllib.request.urlopen(req, timeout=5) as r:
-                data = json.loads(r.read().decode())
-                if data:
-                    latest_tag = data[0]["name"]
-                    latest_v   = latest_tag.lower().replace("v", "").strip()
-                    current_v  = CURRENT_VERSION.lower().replace("v", "").strip()
-                    if version.parse(latest_v) > version.parse(current_v):
-                        update_link = f"https://github.com/{GITHUB_REPO}/tags"
-                        self.ver_label.setText(
-                            f"<a href='{update_link}' style='color:#00ff7f; text-decoration:none;'>"
-                            f"UPDATE AVAILABLE: {latest_tag}</a>")
-                        self.ver_label.setOpenExternalLinks(True)
-                    else:
-                        self.ver_label.setText(f"v{CURRENT_VERSION} (Latest)")
+            headers = {'User-Agent': 'Mozilla/5.0 (ChatGate-Updater)'}
+            current_v = version.parse(
+                CURRENT_VERSION.lower().replace("v", "").strip())
+            latest_v   = current_v
+            latest_tag = None
+            latest_url = f"https://github.com/{GITHUB_REPO}/releases"
+
+            # Check releases
+            try:
+                req = urllib.request.Request(
+                    f"https://api.github.com/repos/{GITHUB_REPO}/releases",
+                    headers=headers)
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    releases = json.loads(r.read().decode())
+                    for rel in releases:
+                        tag = rel.get("tag_name", "")
+                        try:
+                            v = version.parse(tag.lower().replace("v", "").strip())
+                            if v > latest_v:
+                                latest_v   = v
+                                latest_tag = tag
+                                latest_url = rel.get("html_url", latest_url)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # Check tags (catches pre-releases not formally published)
+            try:
+                req = urllib.request.Request(
+                    f"https://api.github.com/repos/{GITHUB_REPO}/tags",
+                    headers=headers)
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    tags = json.loads(r.read().decode())
+                    for t in tags:
+                        tag = t.get("name", "")
+                        try:
+                            v = version.parse(tag.lower().replace("v", "").strip())
+                            if v > latest_v:
+                                latest_v   = v
+                                latest_tag = tag
+                                latest_url = f"https://github.com/{GITHUB_REPO}/tags"
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            if latest_tag:
+                self.ver_label.setText(
+                    f"<a href='{latest_url}' style='color:#00ff7f; text-decoration:none;'>"
+                    f"UPDATE AVAILABLE: {latest_tag}</a>")
+                self.ver_label.setOpenExternalLinks(True)
+            else:
+                self.ver_label.setText(f"v{CURRENT_VERSION} (Latest)")
         except Exception:
             pass
 
