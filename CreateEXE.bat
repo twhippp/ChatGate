@@ -1,1 +1,1 @@
-python -m PyInstaller --onefile --windowed --name "ChatGate" --hidden-import=overlay main.py
+python -m PyInstaller --onefile --windowed --name ChatGate --icon=ChatGate.ico --add-data "ChatGate.ico;." main.py
