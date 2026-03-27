@@ -1,0 +1,1 @@
+python -m PyInstaller --onefile --windowed --name "ChatGate" --hidden-import=overlay main.py
