@@ -430,33 +430,92 @@ class IRCThread(QThread):
         # User whitelist — always show, second priority
         if user.lower() in [u.lower() for u in f.get("user_whitelist", [])]:
             return True
-        # Always-block wordlist
+        # Always-block wordlist — active regardless of gate state
         msg_lower = msg.lower()
         for word in f.get("always_block_words", []):
             if word.lower() in msg_lower:
                 return False
+
         is_filtering = mps >= self.threshold
-        # High-volume block wordlist (only active when filtering)
+
+        # High-volume block wordlist — only active when gate is closed
         if is_filtering:
             for word in f.get("volume_block_words", []):
                 if word.lower() in msg_lower:
                     return False
-        # Role bypass — check all roles, Always wins over Never
-        # A user can have multiple roles (e.g. sub + vip)
-        role_result = None  # None = no role rule applied yet
+
+        # Role bypass — Always wins immediately, Never blocks unless another role says Always
+        role_result = None
         for role in roles:
             rule = self.bypass.get(role, "Normal")
             if rule == "Always":
-                return True  # Always wins immediately
+                return True
             if rule == "Never" and role_result is None:
-                role_result = False  # tentatively block, but keep checking
-            # Normal = fall through to MPS filter
+                role_result = False
         if role_result is False:
             return False
-        # Default: pass through MPS filter
-        if is_filtering:
+
+        # Gate is open — show everything that made it here
+        if not is_filtering:
+            return True
+
+        # Gate is closed — apply quality filter
+        # Only let through messages that are substantive
+        return self._is_substantive(msg_lower)
+
+    # Low-effort patterns the quality filter screens out when gate is closed
+    LOW_VALUE_EXACT = {
+        "lol","lmao","lmfao","gg","ggs","ez","pog","pogchamp","kekw","omegalul",
+        "pepega","monkas","hi","hello","hey","yo","sup","hype","lets go","let's go",
+        "wow","nice","ok","okay","xd","lul","haha","hahaha","lolol","f","w","l",
+        "rip","oof","based","facts","true","same","real","fr","ngl","imo","bruh",
+        "bro","omg","omfg","wtf","damn","dang","yep","yup","nope","nah","ayy",
+    }
+    REPEAT_CHARS  = re.compile(r"(.)\1{4,}")
+    EMOTE_ONLY    = re.compile(r"^([A-Z][a-zA-Z0-9]+\s*)+$")  # runs of Twitch emote-like words
+
+    def _is_substantive(self, msg_lower):
+        """
+        Returns True if a message is worth showing during high-volume filtering.
+        Screens out: very short messages, pure low-value phrases, repeated characters,
+        emote-spam, and messages with no real words.
+        """
+        stripped = msg_lower.strip()
+
+        # Too short to be meaningful
+        if len(stripped) < 15:
+            # Allow short messages that are exact low-value phrases — block them
+            if stripped in self.LOW_VALUE_EXACT:
+                return False
+            # Allow short messages that look like questions
+            if "?" in stripped:
+                return True
+            # Block other short messages when gate is closed
             return False
-        return True
+
+        # Repeated character spam (e.g. "AAAAAAA", "xdddddd")
+        if self.REPEAT_CHARS.search(stripped):
+            return False
+
+        # Count real words (3+ chars) vs total tokens
+        tokens    = re.findall(r"\b\w+\b", stripped)
+        real_words = [t for t in tokens if len(t) >= 3]
+        if not tokens:
+            return False
+
+        # If fewer than 40% of tokens are real words, likely emote spam
+        if len(real_words) / len(tokens) < 0.4:
+            return False
+
+        # Contains a question mark — likely engaging with the streamer
+        if "?" in stripped:
+            return True
+
+        # Has enough real words — show it
+        if len(real_words) >= 4:
+            return True
+
+        return False
 
     def _role_badges_html(self, roles):
         """Build role badge HTML for display in the overlay."""
@@ -1186,38 +1245,56 @@ class ChatGateMain(QWidget):
 
     def _update_stats(self, mps, filtering, platform):
         combined = self.combined_mps_check.isChecked()
-        accent   = self._current_accent
+        threshold = self.mps_spin.value()
+
+        # Update live threshold in threads so spinbox changes take effect immediately
+        if self.irc is not None:
+            self.irc.threshold = threshold
+        if self.yt is not None:
+            self.yt.threshold = threshold
+
+        # In separated mode, don't let an offline platform's stale MPS count
+        if not combined:
+            if platform == "twitch":
+                self._twitch_mps = mps
+                # Only count YouTube if it's actually connected
+                yt_mps = self._yt_mps if (self.yt is not None and self.yt.is_running) else 0.0
+            else:
+                self._yt_mps = mps
+                twitch_mps = self._twitch_mps if (self.irc is not None and self.irc.is_running) else 0.0
 
         if combined:
+            is_filtering = mps >= threshold
             self.mps_label.setText(f"MPS: {mps:.1f}")
-            gate_color = "#ff4444" if filtering else "#44cc44"
-            gate_text  = "🔴 GATE CLOSED" if filtering else "🟢 GATE OPEN"
-            self.mps_label.setStyleSheet(
-                f"color: {gate_color}; font-weight: bold;")
-            self.mps_label.setToolTip(gate_text)
-            # Also update whichever status label is active
+            gate_color = "#ff4444" if is_filtering else "#44cc44"
+            gate_text  = "🔴 GATE CLOSED" if is_filtering else "🟢 GATE OPEN"
+            self.mps_label.setStyleSheet(f"color: {gate_color}; font-weight: bold;")
             if platform == "twitch":
-                self.twitch_status.setText(
-                    f"CONNECTED  |  {gate_text}  |  MPS: {mps:.1f}")
+                self.twitch_status.setText(f"CONNECTED  |  {gate_text}  |  MPS: {mps:.1f}")
                 self.twitch_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
             else:
-                self.yt_status.setText(
-                    f"CONNECTED  |  {gate_text}  |  MPS: {mps:.1f}")
+                self.yt_status.setText(f"CONNECTED  |  {gate_text}  |  MPS: {mps:.1f}")
                 self.yt_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
         else:
             if platform == "twitch":
-                self._twitch_mps = mps
-                gate  = "🔴 GATE CLOSED" if filtering else "🟢 GATE OPEN"
-                color = "#ff4444" if filtering else "#44cc44"
+                is_filtering = mps >= threshold
+                gate  = "🔴 GATE CLOSED" if is_filtering else "🟢 GATE OPEN"
+                color = "#ff4444" if is_filtering else "#44cc44"
                 self.twitch_status.setText(f"CONNECTED  |  {gate}  |  MPS: {mps:.1f}")
                 self.twitch_status.setStyleSheet(f"font-weight: bold; color: {color};")
             else:
-                self._yt_mps = mps
-                gate  = "🔴 GATE CLOSED" if filtering else "🟢 GATE OPEN"
-                color = "#ff4444" if filtering else "#44cc44"
+                is_filtering = mps >= threshold
+                gate  = "🔴 GATE CLOSED" if is_filtering else "🟢 GATE OPEN"
+                color = "#ff4444" if is_filtering else "#44cc44"
                 self.yt_status.setText(f"CONNECTED  |  {gate}  |  MPS: {mps:.1f}")
                 self.yt_status.setStyleSheet(f"font-weight: bold; color: {color};")
-            display_mps = max(self._twitch_mps, self._yt_mps)
+            # Header shows higher of the two active platforms only
+            twitch_active = self.irc is not None and self.irc.is_running
+            yt_active     = self.yt is not None and self.yt.is_running
+            display_mps   = max(
+                self._twitch_mps if twitch_active else 0.0,
+                self._yt_mps     if yt_active     else 0.0
+            )
             self.mps_label.setText(f"MPS: {display_mps:.1f}")
             self.mps_label.setStyleSheet("color: #888; font-weight: bold;")
 
