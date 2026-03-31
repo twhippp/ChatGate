@@ -30,7 +30,7 @@ except ImportError:
 
 # ===================== CONFIG =====================
 SETTINGS_FILE    = "settings.json"
-CURRENT_VERSION  = "0.4.0-beta"
+CURRENT_VERSION  = "0.3.1-beta"
 GITHUB_REPO      = "twhippp/ChatGate"
 WM_HOTKEY        = 0x0312
 HOTKEY_ID        = 1
@@ -532,6 +532,21 @@ class IRCThread(QThread):
 
     def run(self):
         sock = socket.socket()
+
+        # Emit MPS every second regardless of message activity
+        # so the gate state updates even when chat goes quiet
+        def _tick():
+            while self.is_running:
+                time.sleep(1.0)
+                now = time.time()
+                while self.msg_times and now - self.msg_times[0] > 5.0:
+                    self.msg_times.popleft()
+                mps = len(self.msg_times) / 5.0
+                self.stats_update.emit(mps, mps >= self.threshold)
+
+        import threading
+        threading.Thread(target=_tick, daemon=True).start()
+
         try:
             self.status_msg.emit("Connecting...")
             sock.connect(("irc.chat.twitch.tv", 6667))
@@ -645,6 +660,18 @@ class YouTubeThread(QThread):
             return
 
         self.status_msg.emit(f"Connecting... (ID: {video_id})")
+
+        import threading
+        def _tick():
+            while self.is_running:
+                time.sleep(1.0)
+                now = time.time()
+                while self.msg_times and now - self.msg_times[0] > self.CHAT_RATE_WINDOW:
+                    self.msg_times.popleft()
+                mps = len(self.msg_times) / self.CHAT_RATE_WINDOW
+                self.stats_update.emit(mps, mps >= self.threshold)
+        threading.Thread(target=_tick, daemon=True).start()
+
         try:
             chat = pytchat.create(video_id=video_id, interruptable=False)
             if not chat.is_alive():
@@ -861,6 +888,12 @@ class ChatGateMain(QWidget):
         header.addStretch()
         header.addWidget(self.mps_label)
         layout.addLayout(header)
+
+        # Borderless windowed notice
+        bw_label = QLabel("⚠ Game must run in Borderless Windowed mode for overlay to appear on top.")
+        bw_label.setStyleSheet("color: #888; font-size: 10px;")
+        bw_label.setWordWrap(True)
+        layout.addWidget(bw_label)
 
         # ---- Tabs ----
         self.tabs = QTabWidget()

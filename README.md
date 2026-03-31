@@ -38,11 +38,13 @@ ChatGate is a high-performance, dual-window live chat monitor designed for strea
    - A handle will appear on the overlay. Drag it to your preferred location.
    - Click **Lock Position** to make it click-through again and hide the handle.
 
-3. **Filtering**: Adjust the **MPS Limit**. When chat moves faster than this (Messages Per Second), the gate closes and filters start applying.
+3. **Filtering**: Adjust the **MPS Limit**. When chat moves faster than this (Messages Per Second), the gate closes. Low-effort messages (short replies, emote spam, common phrases like "lol" or "gg") get filtered out, while substantive messages like questions and unique comments still come through.
 
 4. **Visibility**: Use the **Opacity** slider to blend the chat into your game's UI.
 
 5. **Hotkey**: Press `Ctrl+Shift+O` at any time — even while in a game — to show or hide the overlay.
+
+> ⚠ **Important**: Your game must be running in **Borderless Windowed** mode for the overlay to appear on top of it. True exclusive fullscreen gives the game complete control of the display, which prevents any overlay from rendering on top. This is a Windows limitation, not specific to ChatGate. Most games support borderless windowed in their video settings, and it's the recommended mode for streaming in general.
 
 ## Controls
 
@@ -99,6 +101,7 @@ ChatGate/
 
 ## Notes
 
+- **Borderless Windowed Required**: The overlay cannot appear on top of games running in exclusive fullscreen mode — this is a fundamental Windows limitation that affects all overlay tools, including OBS. Run your game in **Borderless Windowed** mode for the overlay to work correctly. Most modern games support this in their video/display settings.
 - **Anonymous Mode**: ChatGate connects via `justinfan` on Twitch, so it cannot send messages or view Sub-Only chat if the streamer has strict privacy settings enabled.
 - **YouTube**: Requires `pytchat` (`pip install pytchat`). The channel must be currently live — pytchat cannot read VOD or offline chat.
 - **Windows Primary**: Optimized for Windows GDI+ and Win32 API for transparency and hotkey support. The app has also been tested on Bazzite (Fedora) under ProtonTricks and was fully functional.
