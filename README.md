@@ -18,7 +18,7 @@ ChatGate is a high-performance, dual-window live chat monitor designed for strea
 - **Global Hotkey**: Press `Ctrl+Shift+O` to instantly toggle the overlay visibility while in-game.
 - **Auto-Reconnect**: Automatically reconnects with exponential backoff if either platform drops.
 - **System Tray**: Minimize to the system tray to keep things clean while streaming.
-- **Update Checker**: Automatically checks GitHub for newer releases and tags on startup.
+- **Update Checker**: Automatically checks GitHub for newer releases on startup.
 
 ## Installation
 
@@ -28,23 +28,27 @@ ChatGate is a high-performance, dual-window live chat monitor designed for strea
 
 ## Usage
 
-1. **Connect**:
-   - **Twitch**: Enter a channel name on the Twitch tab and click **Connect**.
-   - **YouTube**: Enter a `@handle`, full stream URL, or video ID on the YouTube tab and click **Connect**.
-   - Both platforms can be connected simultaneously.
+### Connecting
 
-2. **Positioning**:
-   - Click **Unlock Overlay to Move**.
-   - A handle will appear on the overlay. Drag it to your preferred location.
-   - Click **Lock Position** to make it click-through again and hide the handle.
+- **Twitch**: Enter a channel name on the Twitch tab and click **Connect**.
+- **YouTube**: Enter a `@handle`, full stream URL, or video ID on the YouTube tab and click **Connect**.
+- Both platforms can be connected simultaneously.
 
-3. **Filtering**: Adjust the **MPS Limit**. When chat moves faster than this (Messages Per Second), the gate closes. Low-effort messages (short replies, emote spam, common phrases like "lol" or "gg") get filtered out, while substantive messages like questions and unique comments still come through.
+### Positioning the Overlay
 
-4. **Visibility**: Use the **Opacity** slider to blend the chat into your game's UI.
+1. Click **Unlock Overlay to Move**.
+2. A handle will appear on the overlay — drag it to your preferred location.
+3. Click **Lock Position** to make it click-through again and hide the handle.
 
-5. **Hotkey**: Press `Ctrl+Shift+O` at any time — even while in a game — to show or hide the overlay.
+### Filtering
 
-> ⚠ **Important**: Your game must be running in **Borderless Windowed** mode for the overlay to appear on top of it. True exclusive fullscreen gives the game complete control of the display, which prevents any overlay from rendering on top. This is a Windows limitation, not specific to ChatGate. Most games support borderless windowed in their video settings, and it's the recommended mode for streaming in general.
+Adjust the **MPS Limit**. When chat moves faster than this threshold (Messages Per Second), the gate closes and low-effort messages get filtered out — short replies, emote spam, and common phrases like "lol" or "gg". Substantive messages like questions and unique comments still come through. Role Bypass ensures Mods, VIPs, Subs, and YouTube Members always get through regardless of speed.
+
+### Visibility & Hotkey
+
+Use the **Opacity** slider to blend the chat into your game's UI. Press `Ctrl+Shift+O` at any time — even while in a game — to show or hide the overlay.
+
+> ⚠ **Important**: Your game must be running in **Borderless Windowed** mode for the overlay to appear on top of it. True exclusive fullscreen gives the game complete control of the display, preventing any overlay from rendering. This is a Windows limitation that affects all overlay tools including OBS. Most modern games support borderless windowed in their video settings, and it's the recommended mode for streaming in general.
 
 ## Controls
 
@@ -61,29 +65,40 @@ ChatGate is a high-performance, dual-window live chat monitor designed for strea
 
 ### Requirements
 
+Python dependencies are managed via a virtual environment. [uv](https://github.com/astral-sh/uv) is recommended:
+
+```powershell
+uv venv
+uv pip install -r requirements.txt
 ```
+
+If you prefer standard pip with an existing Python installation:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Running from source
+### Running from Source
 
+```powershell
+.venv\Scripts\python.exe main.py
 ```
-python main.py
-```
 
-### Building the exe
+### Building the EXE
 
-A `CreateEXE.bat` file is included in the repo for convenience. Just double-click it or run:
+A `CreateEXE.bat` file is included for convenience. Just double-click it or run:
 
-```
+```powershell
 CreateEXE.bat
 ```
 
 This runs the full PyInstaller command with all the correct flags. The output exe will be in the `dist/` folder.
 
-If you want to run the command manually:
+To run the command manually:
 
-```
+```powershell
 python -m PyInstaller --onefile --windowed --name ChatGate --icon=ChatGate.ico --add-data "ChatGate.ico;." --hidden-import pytchat --hidden-import PyQt5.QtSvg main.py
 ```
 
@@ -101,10 +116,10 @@ ChatGate/
 
 ## Notes
 
-- **Borderless Windowed Required**: The overlay cannot appear on top of games running in exclusive fullscreen mode — this is a fundamental Windows limitation that affects all overlay tools, including OBS. Run your game in **Borderless Windowed** mode for the overlay to work correctly. Most modern games support this in their video/display settings.
-- **Anonymous Mode**: ChatGate connects via `justinfan` on Twitch, so it cannot send messages or view Sub-Only chat if the streamer has strict privacy settings enabled.
-- **YouTube**: Requires `pytchat` (`pip install pytchat`). The channel must be currently live — pytchat cannot read VOD or offline chat.
-- **Windows Primary**: Optimized for Windows GDI+ and Win32 API for transparency and hotkey support. The app has also been tested on Bazzite (Fedora) under ProtonTricks and was fully functional.
+- **Borderless Windowed Required**: The overlay cannot appear on top of games running in exclusive fullscreen — this is a fundamental Windows limitation affecting all overlay tools including OBS.
+- **Anonymous Twitch Mode**: ChatGate connects via `justinfan`, so it cannot send messages or view Sub-Only chat if the streamer has strict privacy settings enabled.
+- **YouTube**: The channel must be currently live — pytchat cannot read VOD or offline chat.
+- **Platform Support**: Optimized for Windows. Also tested and fully functional on Bazzite (Fedora) under ProtonTricks.
 
 ## Contributing
 
