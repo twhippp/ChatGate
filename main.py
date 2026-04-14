@@ -10,13 +10,15 @@ import ctypes
 import ctypes.wintypes as wintypes
 from collections import deque
 import urllib.request
+import threading
 from packaging import version
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QDoubleSpinBox,
     QSlider, QCheckBox, QSpinBox, QSystemTrayIcon, QMenu, QAction,
-    QTabWidget, QComboBox, QScrollArea, QFrame, QSizePolicy, QGroupBox
+    QTabWidget, QComboBox, QScrollArea, QFrame, QSizePolicy, QGroupBox,
+    QProgressDialog, QMessageBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt5.QtGui import QIcon, QPixmap, QCursor
@@ -31,8 +33,8 @@ except ImportError as e:
     YT_ERROR = str(e)
 
 # ===================== CONFIG =====================
-SETTINGS_FILE    = "settings.json"
-CURRENT_VERSION  = "0.3.2-beta"
+SETTINGS_FILE    = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ChatGate", "settings.json")
+CURRENT_VERSION  = "0.3.1-beta"
 GITHUB_REPO      = "twhippp/ChatGate"
 WM_HOTKEY        = 0x0312
 HOTKEY_ID        = 1
@@ -144,7 +146,8 @@ def fmt_subgift_bomb(gifter, count):
             f"<b style='color:#FFD700'>{count}</b> subs to the community!</span>")
 
 def fmt_announcement(user, msg, color="PRIMARY"):
-    color_map = {"PRIMARY": "#9146FF", "BLUE": "#4da6ff", "GREEN": "#00e5cb", "ORANGE": "#ff9a00", "PURPLE": "#9146FF"}
+    color_map = {"PRIMARY": "#9146FF", "BLUE": "#4da6ff", "GREEN": "#00e5cb",
+                 "ORANGE": "#ff9a00", "PURPLE": "#9146FF"}
     c = color_map.get(color.upper(), "#9146FF")
     return (f"<span style='background-color:{c}22; border-left:3px solid {c}; padding:2px 6px;'>"
             f"📢 <b style='color:{c}'>{user}</b>: {msg}</span>")
@@ -160,6 +163,11 @@ def fmt_first_chat(user, msg):
             f"👋 <b style='color:#00e5cb'>First chat!</b> "
             f"<b style='color:#00e5cb'>{user}</b>: {msg}</span>")
 
+def fmt_watch_streak(user, months):
+    return (f"<span style='background-color:#ff8c0022; border-left:3px solid #ff8c00; padding:2px 6px;'>"
+            f"🔥 <b style='color:#ff8c00'>{user}</b> has been watching for "
+            f"<b style='color:#ff8c00'>{months} months</b> straight!</span>")
+
 # ===================== ICON =====================
 def get_icon_path():
     base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -167,15 +175,15 @@ def get_icon_path():
 
 # ===================== SETTINGS =====================
 SETTINGS_DEFAULTS = {
-    "twitch_channel": "piratesoftware",
-    "yt_handle": "",
-    "mps": 3.0,
-    "opacity": 100,
-    "pos_x": 100, "pos_y": 100, "width": 400, "height": 600,
-    "dark_mode": True,
-    "font_size": 22,
-    "minimize_to_tray": True,
-    "combined_mps": True,
+    "twitch_channel":     "piratesoftware",
+    "yt_handle":          "",
+    "mps":                3.0,
+    "opacity":            100,
+    "pos_x":              100, "pos_y": 100, "width": 400, "height": 600,
+    "dark_mode":          True,
+    "font_size":          22,
+    "minimize_to_tray":   True,
+    "combined_mps":       True,
     "bypass_broadcaster": "Normal",
     "bypass_mod":         "Normal",
     "bypass_vip":         "Normal",
@@ -190,21 +198,12 @@ SETTINGS_DEFAULTS = {
     "show_bits":           True,
     "show_announcements":  True,
     "show_first_chat":     False,
+    "show_watch_streaks":  True,
 }
 
 def migrate_settings(raw):
     migrated = dict(SETTINGS_DEFAULTS)
-    direct_keys = [
-        "twitch_channel", "yt_handle", "mps", "opacity",
-        "pos_x", "pos_y", "width", "height",
-        "dark_mode", "font_size", "minimize_to_tray", "combined_mps",
-        "bypass_broadcaster", "bypass_mod", "bypass_vip", "bypass_sub",
-        "bypass_yt_member",
-        "always_block_words", "volume_block_words",
-        "user_whitelist", "user_blacklist",
-        "show_raids", "show_subs", "show_bits", "show_announcements", "show_first_chat",
-    ]
-    for k in direct_keys:
+    for k in SETTINGS_DEFAULTS:
         if k in raw: migrated[k] = raw[k]
     bool_map = {"mod": "bypass_mod", "vip": "bypass_vip", "sub": "bypass_sub"}
     for old_key, new_key in bool_map.items():
@@ -215,6 +214,7 @@ def migrate_settings(raw):
     return migrated
 
 def load_settings():
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r") as f:
@@ -229,6 +229,7 @@ def load_settings():
     return dict(SETTINGS_DEFAULTS)
 
 def save_settings_to_file(data):
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
     with open(SETTINGS_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
@@ -278,14 +279,46 @@ def resolve_video_id(user_input):
             continue
     return None
 
+# ===================== UPDATER THREAD =====================
+class UpdateDownloadThread(QThread):
+    """Downloads the installer in the background and reports progress."""
+    progress  = pyqtSignal(int)   # 0-100
+    finished  = pyqtSignal(str)   # path to downloaded installer
+    error     = pyqtSignal(str)
+
+    def __init__(self, url, dest_path):
+        super().__init__()
+        self.url       = url
+        self.dest_path = dest_path
+
+    def run(self):
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0 (ChatGate-Updater)'}
+            req = urllib.request.Request(self.url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                total = int(resp.headers.get('Content-Length', 0))
+                downloaded = 0
+                chunk_size = 65536
+                with open(self.dest_path, 'wb') as f:
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            self.progress.emit(int(downloaded / total * 100))
+            self.finished.emit(self.dest_path)
+        except Exception as e:
+            self.error.emit(str(e))
+
 # ===================== BUBBLE WIDGET =====================
 class BubbleWidget(QWidget):
     removed = pyqtSignal(str)
 
     def __init__(self, text, accent="#9146FF", parent=None):
         super().__init__(parent)
-        self.text   = text
-        self.accent = accent
+        self.text = text
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 4, 2)
         layout.setSpacing(4)
@@ -391,7 +424,7 @@ class IRCThread(QThread):
         self.threshold   = threshold
         self.bypass      = bypass
         self.filters     = filters
-        self.event_flags = event_flags  # dict: show_raids, show_subs, show_bits, show_announcements, show_first_chat
+        self.event_flags = event_flags
         self.msg_times   = deque()
         self.is_running  = True
 
@@ -450,33 +483,26 @@ class IRCThread(QThread):
         return " ".join(parts) + (" " if parts else "")
 
     def _handle_usernotice(self, tags):
-        """Parse USERNOTICE events and return formatted HTML or None."""
-        msg_id   = tags.get("msg-id", "")
-        user     = tags.get("display-name", tags.get("login", "Someone"))
-        sys_msg  = tags.get("system-msg", "").replace("\\s", " ")
+        msg_id  = tags.get("msg-id", "")
+        user    = tags.get("display-name", tags.get("login", "Someone"))
+        sys_msg = tags.get("system-msg", "").replace("\\s", " ")
 
         if msg_id == "raid" and self.event_flags.get("show_raids"):
-            viewer_count = tags.get("msg-param-viewerCount", "?")
-            return fmt_raid(user, viewer_count)
-
+            return fmt_raid(user, tags.get("msg-param-viewerCount", "?"))
         if msg_id in ("sub", "resub") and self.event_flags.get("show_subs"):
-            months = tags.get("msg-param-cumulative-months", "")
-            return fmt_sub(user, months)
-
+            return fmt_sub(user, tags.get("msg-param-cumulative-months", ""))
         if msg_id == "subgift" and self.event_flags.get("show_subs"):
-            recipient = tags.get("msg-param-recipient-display-name", "someone")
-            months    = tags.get("msg-param-months", "")
-            return fmt_subgift(user, recipient, months)
-
-        if msg_id in ("submysterygift", "standardpayforward", "communitypayforward") and self.event_flags.get("show_subs"):
-            count = tags.get("msg-param-mass-gift-count", "?")
-            return fmt_subgift_bomb(user, count)
-
+            return fmt_subgift(user,
+                tags.get("msg-param-recipient-display-name", "someone"),
+                tags.get("msg-param-months", ""))
+        if msg_id in ("submysterygift", "standardpayforward", "communitypayforward") \
+                and self.event_flags.get("show_subs"):
+            return fmt_subgift_bomb(user, tags.get("msg-param-mass-gift-count", "?"))
         if msg_id == "announcement" and self.event_flags.get("show_announcements"):
             color = tags.get("msg-param-color", "PRIMARY")
-            # message text comes separately; sys_msg is the announcement body for this type
             return fmt_announcement(user, sys_msg, color) if sys_msg else None
-
+        if msg_id == "watch-streak" and self.event_flags.get("show_watch_streaks"):
+            return fmt_watch_streak(user, tags.get("msg-param-streak-months", "?"))
         return None
 
     def run(self):
@@ -488,9 +514,9 @@ class IRCThread(QThread):
                 now = time.time()
                 while self.msg_times and now - self.msg_times[0] > 5.0:
                     self.msg_times.popleft()
-                self.stats_update.emit(len(self.msg_times) / 5.0, len(self.msg_times) / 5.0 >= self.threshold)
+                mps = len(self.msg_times) / 5.0
+                self.stats_update.emit(mps, mps >= self.threshold)
 
-        import threading
         threading.Thread(target=_tick, daemon=True).start()
 
         try:
@@ -509,27 +535,22 @@ class IRCThread(QThread):
                 while "\r\n" in buf:
                     line, buf = buf.split("\r\n", 1)
                     if not line: continue
-
                     if line.startswith("PING"):
                         sock.send("PONG :tmi.twitch.tv\r\n".encode())
                         continue
 
-                    # Parse tags
                     tags = {}
                     rest = line
                     if rest.startswith("@"):
                         tag_str, rest = rest[1:].split(" ", 1)
                         tags = dict(t.split("=", 1) for t in tag_str.split(";") if "=" in t)
 
-                    # USERNOTICE — raids, subs, announcements
                     if "USERNOTICE" in rest:
                         html = self._handle_usernotice(tags)
-                        if html:
-                            self.message.emit(html)
+                        if html: self.message.emit(html)
                         continue
 
-                    if "PRIVMSG" not in rest:
-                        continue
+                    if "PRIVMSG" not in rest: continue
 
                     user = tags.get("display-name", "User")
                     try:
@@ -544,7 +565,6 @@ class IRCThread(QThread):
                     mps = len(self.msg_times) / 5.0
                     self.stats_update.emit(mps, mps >= self.threshold)
 
-                    # Bits / cheers
                     bits = tags.get("bits", "")
                     if bits and self.event_flags.get("show_bits"):
                         self.message.emit(fmt_bits(user, bits, content.strip()))
@@ -557,7 +577,6 @@ class IRCThread(QThread):
                     if "vip" in badges:               roles.append("vip")
                     if tags.get("subscriber") == "1": roles.append("sub")
 
-                    # First-time chatter
                     if tags.get("first-msg") == "1" and self.event_flags.get("show_first_chat"):
                         self.message.emit(fmt_first_chat(user, content.strip()))
                         continue
@@ -624,7 +643,6 @@ class YouTubeThread(QThread):
 
         self.status_msg.emit(f"Connecting... (ID: {video_id})")
 
-        import threading
         def _tick():
             while self.is_running:
                 time.sleep(1.0)
@@ -695,8 +713,11 @@ class ChatGateMain(QWidget):
         self._yt_reconnect_timer.timeout.connect(self._do_yt_reconnect)
         self._last_yt_handle        = ""
 
-        self._twitch_mps = 0.0
-        self._yt_mps     = 0.0
+        self._twitch_mps     = 0.0
+        self._yt_mps         = 0.0
+        self._latest_tag     = None
+        self._latest_url     = None
+        self._download_thread = None
 
         self.overlay.move(self.settings.get("pos_x", 100), self.settings.get("pos_y", 100))
         self.overlay.resize(self.settings.get("width", 400), self.settings.get("height", 600))
@@ -717,6 +738,7 @@ class ChatGateMain(QWidget):
             "show_bits":          self.show_bits_check.isChecked(),
             "show_announcements": self.show_ann_check.isChecked(),
             "show_first_chat":    self.show_first_check.isChecked(),
+            "show_watch_streaks": self.show_streak_check.isChecked(),
         }
 
     def save_settings(self):
@@ -777,7 +799,8 @@ class ChatGateMain(QWidget):
         if not hasattr(self, 'theme_btn'): return
         accent = ACCENT.get(index, "#9146FF")
         self.apply_theme(accent)
-        for bl in [self.always_block_list, self.volume_block_list, self.user_whitelist, self.user_blacklist]:
+        for bl in [self.always_block_list, self.volume_block_list,
+                   self.user_whitelist, self.user_blacklist]:
             bl.update_accent(accent)
 
     def init_tray(self):
@@ -831,9 +854,14 @@ class ChatGateMain(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        # Header
         header = QHBoxLayout()
-        self.ver_label = QLabel(f"v{CURRENT_VERSION}")
+        self.ver_label = QPushButton(f"v{CURRENT_VERSION}")
+        self.ver_label.setFlat(True)
+        self.ver_label.setCursor(QCursor(Qt.PointingHandCursor))
+        self.ver_label.setStyleSheet(
+            "QPushButton { background: transparent; border: none; "
+            "font-weight: normal; padding: 0; color: inherit; text-align: left; }")
+        self.ver_label.clicked.connect(self._on_update_clicked)
         hotkey_lbl = QLabel("Ctrl+Shift+O — Toggle Overlay")
         hotkey_lbl.setStyleSheet("color: #666; font-size: 11px;")
         self.mps_label = QLabel("MPS: 0.0")
@@ -864,7 +892,8 @@ class ChatGateMain(QWidget):
         opacity_row = QHBoxLayout()
         opacity_row.addWidget(QLabel("<b>OPACITY</b>"))
         opacity_row.addWidget(make_tooltip_btn(
-            "Controls how transparent the chat overlay background is.\n100 = fully opaque, 10 = nearly invisible."))
+            "Controls how transparent the chat overlay background is.\n"
+            "100 = fully opaque, 10 = nearly invisible."))
         opacity_row.addStretch()
         layout.addLayout(opacity_row)
         self.alpha_slider = QSlider(Qt.Horizontal)
@@ -887,7 +916,8 @@ class ChatGateMain(QWidget):
         fm_row.addSpacing(12)
         fm_row.addWidget(QLabel("MPS Limit:")); fm_row.addWidget(self.mps_spin)
         fm_row.addWidget(make_tooltip_btn(
-            "Messages Per Second threshold.\nWhen chat exceeds this speed, the filter activates."))
+            "Messages Per Second threshold.\n"
+            "When chat exceeds this speed, the filter activates."))
         fm_row.addStretch()
         layout.addLayout(fm_row)
 
@@ -897,7 +927,8 @@ class ChatGateMain(QWidget):
         self.combined_mps_check.stateChanged.connect(self.save_settings)
         cmps_row.addWidget(self.combined_mps_check)
         cmps_row.addWidget(make_tooltip_btn(
-            "Combined: all platforms share one MPS pool.\nSeparated: each platform tracks its own speed."))
+            "Combined: all platforms share one MPS pool.\n"
+            "Separated: each platform tracks its own speed."))
         cmps_row.addStretch()
         layout.addLayout(cmps_row)
 
@@ -912,7 +943,8 @@ class ChatGateMain(QWidget):
         layout.addLayout(bottom_row)
 
     def _hline(self):
-        line = QFrame(); line.setFrameShape(QFrame.HLine); line.setStyleSheet("color: #464649;")
+        line = QFrame(); line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("color: #464649;")
         return line
 
     def _bypass_combo(self, setting_key):
@@ -927,7 +959,6 @@ class ChatGateMain(QWidget):
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
 
-        # Connect row
         row = QHBoxLayout()
         self.twitch_input = QLineEdit(self.settings.get("twitch_channel", ""))
         self.twitch_input.setPlaceholderText("Channel name")
@@ -942,11 +973,11 @@ class ChatGateMain(QWidget):
         lay.addWidget(self.twitch_status)
         lay.addWidget(self._hline())
 
-        # Role bypass
         bh = QHBoxLayout()
         bh.addWidget(QLabel("<b>ALLOW MESSAGES</b>"))
         bh.addWidget(make_tooltip_btn(
-            "Always: always show regardless of filter.\nNormal: goes through MPS filter.\nNever: always hidden."))
+            "Always: always show regardless of filter.\n"
+            "Normal: goes through MPS filter.\nNever: always hidden."))
         bh.addStretch()
         lay.addLayout(bh)
 
@@ -962,70 +993,28 @@ class ChatGateMain(QWidget):
 
         lay.addWidget(self._hline())
 
-        # ---- Event toggles ----
         ev_group = QGroupBox("Channel Events")
         ev_lay   = QVBoxLayout(ev_group)
         ev_lay.setSpacing(6)
 
-        self.show_raids_check = QCheckBox("Show Raids")
-        self.show_raids_check.setChecked(self.settings.get("show_raids", True))
-        self.show_raids_check.stateChanged.connect(self.save_settings)
+        def ev_check(label, key, default=True):
+            cb = QCheckBox(label)
+            cb.setChecked(self.settings.get(key, default))
+            cb.stateChanged.connect(self.save_settings)
+            return cb
 
-        self.show_subs_check = QCheckBox("Show Subs / Resubs / Gift Subs")
-        self.show_subs_check.setChecked(self.settings.get("show_subs", True))
-        self.show_subs_check.stateChanged.connect(self.save_settings)
-
-        self.show_bits_check = QCheckBox("Show Bits / Cheers")
-        self.show_bits_check.setChecked(self.settings.get("show_bits", True))
-        self.show_bits_check.stateChanged.connect(self.save_settings)
-
-        self.show_ann_check = QCheckBox("Show Announcements")
-        self.show_ann_check.setChecked(self.settings.get("show_announcements", True))
-        self.show_ann_check.stateChanged.connect(self.save_settings)
-
-        self.show_first_check = QCheckBox("Highlight First-Time Chatters")
-        self.show_first_check.setChecked(self.settings.get("show_first_chat", False))
-        self.show_first_check.stateChanged.connect(self.save_settings)
+        self.show_raids_check  = ev_check("Show Raids",                     "show_raids")
+        self.show_subs_check   = ev_check("Show Subs / Resubs / Gift Subs", "show_subs")
+        self.show_bits_check   = ev_check("Show Bits / Cheers",             "show_bits")
+        self.show_ann_check    = ev_check("Show Announcements",             "show_announcements")
+        self.show_streak_check = ev_check("Show Watch Streaks",             "show_watch_streaks")
+        self.show_first_check  = ev_check("Highlight First-Time Chatters",  "show_first_chat", default=False)
 
         for cb in [self.show_raids_check, self.show_subs_check, self.show_bits_check,
-                   self.show_ann_check, self.show_first_check]:
+                   self.show_ann_check, self.show_streak_check, self.show_first_check]:
             ev_lay.addWidget(cb)
 
         lay.addWidget(ev_group)
-        lay.addWidget(self._hline())
-
-        # ---- Test buttons ----
-        test_group = QGroupBox("Preview Events")
-        test_lay   = QVBoxLayout(test_group)
-        test_lay.setSpacing(4)
-        test_lbl = QLabel("Send a sample event to the overlay:")
-        test_lbl.setStyleSheet("font-size: 11px; color: #888;")
-        test_lay.addWidget(test_lbl)
-
-        btn_row1 = QHBoxLayout()
-        btn_row2 = QHBoxLayout()
-
-        def test_btn(label, fn):
-            b = QPushButton(label)
-            b.clicked.connect(lambda: (self._show_overlay(), self.overlay.add_message(fn())))
-            return b
-
-        btn_row1.addWidget(test_btn("🚨 Raid",    lambda: fmt_raid("ExampleStreamer", 420)))
-        btn_row1.addWidget(test_btn("⭐ Sub",     lambda: fmt_sub("CoolViewer", "6")))
-        btn_row1.addWidget(test_btn("🎁 Gift Sub",lambda: fmt_subgift("GenerousGuy", "LuckyViewer", "1")))
-        btn_row2.addWidget(test_btn("🎁 Sub Bomb",lambda: fmt_subgift_bomb("BigDonor", "10")))
-        btn_row2.addWidget(test_btn("💎 Bits",    lambda: fmt_bits("CheerPerson", "500", "Great stream!")))
-        btn_row2.addWidget(test_btn("📢 Announce",lambda: fmt_announcement("Moderator", "Welcome everyone!", "BLUE")))
-
-        first_row = QHBoxLayout()
-        first_row.addWidget(test_btn("👋 First Chat", lambda: fmt_first_chat("NewViewer", "Hello! First time here!")))
-        first_row.addStretch()
-
-        test_lay.addLayout(btn_row1)
-        test_lay.addLayout(btn_row2)
-        test_lay.addLayout(first_row)
-        lay.addWidget(test_group)
-
         lay.addStretch()
         return tab
 
@@ -1052,7 +1041,8 @@ class ChatGateMain(QWidget):
         bh = QHBoxLayout()
         bh.addWidget(QLabel("<b>ALLOW MESSAGES</b>"))
         bh.addWidget(make_tooltip_btn(
-            "Always: member messages always show.\nNormal: members go through the MPS filter.\nNever: member messages are always hidden.",
+            "Always: member messages always show.\n"
+            "Normal: members go through the MPS filter.\nNever: member messages are always hidden.",
             accent="#FF0000"))
         bh.addStretch()
         lay.addLayout(bh)
@@ -1110,7 +1100,11 @@ class ChatGateMain(QWidget):
         return tab
 
     def sync_overlay(self):
-        self.overlay.update_style(self.font_spin.value(), self.alpha_slider.value() / 100.0)
+        opacity = self.alpha_slider.value() / 100.0
+        # setWindowOpacity affects the entire window including text.
+        # update_style still receives it for any background styling in overlay.py.
+        self.overlay.setWindowOpacity(opacity)
+        self.overlay.update_style(self.font_spin.value(), opacity)
         self.overlay.resize(self.settings.get("width", 400), self.overlay.height())
         self.save_settings()
 
@@ -1122,7 +1116,8 @@ class ChatGateMain(QWidget):
 
     def register_hotkey(self):
         try:
-            ctypes.windll.user32.RegisterHotKey(int(self.winId()), HOTKEY_ID, 0x0002 | 0x0004, ord("O"))
+            ctypes.windll.user32.RegisterHotKey(
+                int(self.winId()), HOTKEY_ID, 0x0002 | 0x0004, ord("O"))
         except: pass
 
     def _hotkey_toggle(self):
@@ -1245,40 +1240,125 @@ class ChatGateMain(QWidget):
             self.mps_label.setText(f"MPS: {display_mps:.1f}")
             self.mps_label.setStyleSheet("color: #888; font-weight: bold;")
 
+    # ===================== UPDATE SYSTEM =====================
     def check_for_updates(self):
-        try:
-            headers   = {'User-Agent': 'Mozilla/5.0 (ChatGate-Updater)'}
-            current_v = version.parse(CURRENT_VERSION.lower().replace("v", "").strip())
-            latest_v  = current_v
-            latest_tag, latest_url = None, f"https://github.com/{GITHUB_REPO}/releases"
+        """Checks GitHub tags in a background thread.
+        Tags are used instead of Releases because pre-release versions
+        are published as tags only, not as full GitHub Releases.
+        """
+        def _check():
+            try:
+                headers   = {'User-Agent': 'Mozilla/5.0 (ChatGate-Updater)'}
+                current_v = version.parse(CURRENT_VERSION.lower().replace("v", "").strip())
+                latest_v  = current_v
+                latest_tag = None
+                tags_page  = f"https://github.com/{GITHUB_REPO}/tags"
 
-            for endpoint, url_builder in [
-                (f"https://api.github.com/repos/{GITHUB_REPO}/releases",
-                 lambda item: item.get("html_url", latest_url)),
-                (f"https://api.github.com/repos/{GITHUB_REPO}/tags",
-                 lambda item: f"https://github.com/{GITHUB_REPO}/tags"),
-            ]:
-                try:
-                    req = urllib.request.Request(endpoint, headers=headers)
-                    with urllib.request.urlopen(req, timeout=5) as r:
-                        for item in json.loads(r.read().decode()):
-                            tag = item.get("tag_name") or item.get("name", "")
-                            try:
-                                v = version.parse(tag.lower().replace("v", "").strip())
-                                if v > latest_v:
-                                    latest_v = v; latest_tag = tag; latest_url = url_builder(item)
-                            except Exception: pass
-                except Exception: pass
+                # Fetch the list of tags
+                req = urllib.request.Request(
+                    f"https://api.github.com/repos/{GITHUB_REPO}/tags",
+                    headers=headers)
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    tags = json.loads(r.read().decode())
 
-            if latest_tag:
-                self.ver_label.setText(
-                    f"<a href='{latest_url}' style='color:#00ff7f; text-decoration:none;'>"
-                    f"UPDATE AVAILABLE: {latest_tag}</a>")
-                self.ver_label.setOpenExternalLinks(True)
-            else:
-                self.ver_label.setText(f"v{CURRENT_VERSION} (Latest)")
-        except Exception:
-            pass
+                for tag_obj in tags:
+                    tag = tag_obj.get("name", "")
+                    try:
+                        v = version.parse(tag.lower().replace("v", "").strip())
+                    except Exception:
+                        continue
+                    if v > latest_v:
+                        latest_v   = v
+                        latest_tag = tag
+
+                if latest_tag:
+                    self._latest_tag = latest_tag
+                    # Try to find a Setup .exe on the matching release, if one exists.
+                    # Fall back to the tags page if not found.
+                    dl_url = tags_page
+                    try:
+                        rel_req = urllib.request.Request(
+                            f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/{latest_tag}",
+                            headers=headers)
+                        with urllib.request.urlopen(rel_req, timeout=5) as r:
+                            release = json.loads(r.read().decode())
+                        for asset in release.get("assets", []):
+                            name = asset.get("name", "").lower()
+                            if name.endswith(".exe") and "setup" in name:
+                                dl_url = asset.get("browser_download_url", tags_page)
+                                break
+                    except Exception:
+                        pass  # no release for this tag, tags page fallback is fine
+                    self._latest_url = dl_url
+                    QTimer.singleShot(0, lambda: self._show_update_available(latest_tag))
+                else:
+                    QTimer.singleShot(0, lambda: (self.ver_label.setText(f"v{CURRENT_VERSION} (Latest)"), self.ver_label.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0; color: inherit; text-align: left; }")))
+
+            except Exception:
+                QTimer.singleShot(0, lambda: (self.ver_label.setText(f"v{CURRENT_VERSION}"), self.ver_label.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0; color: inherit; text-align: left; }")))
+
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _show_update_available(self, tag):
+        self.ver_label.setText(f"⬆ UPDATE AVAILABLE: {tag}  (click to install)")
+        self.ver_label.setStyleSheet(
+            "QPushButton { background: transparent; border: none; padding: 0; "
+            "color: #00ff7f; font-weight: bold; text-align: left; }")
+
+    def _on_update_clicked(self):
+        """Called when the user clicks the version label."""
+        if not self._latest_tag:
+            return  # no update pending, do nothing
+
+        reply = QMessageBox.question(
+            self, "Update ChatGate",
+            f"A new version ({self._latest_tag}) is available.\n\n"
+            f"Download and run the installer now?\n"
+            f"ChatGate will close automatically when the installer launches.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        url = self._latest_url
+        if not url or not url.endswith(".exe"):
+            # No direct asset found — fall back to opening the releases page
+            import webbrowser
+            webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases")
+            return
+
+        # Download the installer to a temp file then launch it
+        import tempfile
+        dest = os.path.join(tempfile.gettempdir(), f"ChatGate_Setup_{self._latest_tag}.exe")
+
+        self._progress_dlg = QProgressDialog(
+            f"Downloading ChatGate {self._latest_tag}...", "Cancel", 0, 100, self)
+        self._progress_dlg.setWindowTitle("Updating ChatGate")
+        self._progress_dlg.setWindowModality(Qt.WindowModal)
+        self._progress_dlg.setMinimumDuration(0)
+        self._progress_dlg.setValue(0)
+
+        self._download_thread = UpdateDownloadThread(url, dest)
+        self._download_thread.progress.connect(self._progress_dlg.setValue)
+        self._download_thread.finished.connect(self._on_download_finished)
+        self._download_thread.error.connect(self._on_download_error)
+        self._progress_dlg.canceled.connect(self._download_thread.terminate)
+        self._download_thread.start()
+
+    def _on_download_finished(self, path):
+        self._progress_dlg.close()
+        # Launch the installer, then quit ChatGate
+        import subprocess
+        subprocess.Popen([path])
+        QApplication.quit()
+
+    def _on_download_error(self, err):
+        self._progress_dlg.close()
+        QMessageBox.warning(self, "Download Failed",
+            f"Could not download the update:\n{err}\n\n"
+            f"You can download it manually from:\n"
+            f"https://github.com/{GITHUB_REPO}/releases")
 
 # ===================== ENTRY =====================
 if __name__ == "__main__":
