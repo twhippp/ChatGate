@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QComboBox, QScrollArea, QFrame, QSizePolicy, QGroupBox,
     QProgressDialog, QMessageBox
 )
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QMetaObject, Q_ARG, pyqtSlot
 from PyQt5.QtGui import QIcon, QPixmap, QCursor
 from overlay import ChatOverlay
 
@@ -34,7 +34,7 @@ except ImportError as e:
 
 # ===================== CONFIG =====================
 SETTINGS_FILE    = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ChatGate", "settings.json")
-CURRENT_VERSION  = "0.3.1-beta"
+CURRENT_VERSION  = "0.4.0-beta"
 GITHUB_REPO      = "twhippp/ChatGate"
 WM_HOTKEY        = 0x0312
 HOTKEY_ID        = 1
@@ -397,6 +397,16 @@ class BubbleList(QWidget):
 
     def update_accent(self, accent):
         self.accent = accent
+
+# ===================== CLICKABLE LABEL =====================
+class ClickableLabel(QLabel):
+    """A QLabel that emits a clicked signal when pressed."""
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 # ===================== TOOLTIP BUTTON =====================
 def make_tooltip_btn(tip_text, accent="#9146FF"):
@@ -855,12 +865,8 @@ class ChatGateMain(QWidget):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        self.ver_label = QPushButton(f"v{CURRENT_VERSION}")
-        self.ver_label.setFlat(True)
+        self.ver_label = ClickableLabel(f"v{CURRENT_VERSION}")
         self.ver_label.setCursor(QCursor(Qt.PointingHandCursor))
-        self.ver_label.setStyleSheet(
-            "QPushButton { background: transparent; border: none; "
-            "font-weight: normal; padding: 0; color: inherit; text-align: left; }")
         self.ver_label.clicked.connect(self._on_update_clicked)
         hotkey_lbl = QLabel("Ctrl+Shift+O — Toggle Overlay")
         hotkey_lbl.setStyleSheet("color: #666; font-size: 11px;")
@@ -1242,68 +1248,90 @@ class ChatGateMain(QWidget):
 
     # ===================== UPDATE SYSTEM =====================
     def check_for_updates(self):
-        """Checks GitHub tags in a background thread.
-        Tags are used instead of Releases because pre-release versions
-        are published as tags only, not as full GitHub Releases.
-        """
+        """Check GitHub tags for a newer version. Runs in a background thread."""
         def _check():
             try:
-                headers   = {'User-Agent': 'Mozilla/5.0 (ChatGate-Updater)'}
-                current_v = version.parse(CURRENT_VERSION.lower().replace("v", "").strip())
-                latest_v  = current_v
-                latest_tag = None
-                tags_page  = f"https://github.com/{GITHUB_REPO}/tags"
+                print("\n=== UPDATE CHECK START ===")
 
-                # Fetch the list of tags
+                headers = {'User-Agent': 'Mozilla/5.0 (ChatGate-Updater)'}
+
+                current_v_str = CURRENT_VERSION.lower().replace("v", "").strip()
+                current_v = version.parse(current_v_str)
+
+                print("Current version (raw):", CURRENT_VERSION)
+                print("Current version (parsed):", current_v)
+
                 req = urllib.request.Request(
                     f"https://api.github.com/repos/{GITHUB_REPO}/tags",
-                    headers=headers)
+                    headers=headers
+                )
+
                 with urllib.request.urlopen(req, timeout=8) as r:
-                    tags = json.loads(r.read().decode())
+                    raw = r.read().decode()
+                    print("Raw response length:", len(raw))
+                    tags = json.loads(raw)
+
+                print("Tags received:", [t.get("name") for t in tags])
+
+                latest_v = current_v
+                latest_tag = None
 
                 for tag_obj in tags:
-                    tag = tag_obj.get("name", "")
+                    name = tag_obj.get("name", "")
+                    print("\n--- Checking tag:", name)
+
                     try:
-                        v = version.parse(tag.lower().replace("v", "").strip())
-                    except Exception:
+                        parsed_name = name.lower().replace("v", "").strip()
+                        v = version.parse(parsed_name)
+
+                        print("Parsed tag version:", v)
+                        print("Compare:", v, ">", current_v, "=", v > current_v)
+
+                        if v > latest_v:
+                            print("NEW LATEST FOUND:", name)
+                            latest_v = v
+                            latest_tag = name
+
+                    except Exception as e:
+                        print("Failed to parse tag:", name, "| Error:", e)
                         continue
-                    if v > latest_v:
-                        latest_v   = v
-                        latest_tag = tag
+
+                print("\nFinal latest_tag:", latest_tag)
 
                 if latest_tag:
-                    self._latest_tag = latest_tag
-                    # Try to find a Setup .exe on the matching release, if one exists.
-                    # Fall back to the tags page if not found.
-                    dl_url = tags_page
-                    try:
-                        rel_req = urllib.request.Request(
-                            f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/{latest_tag}",
-                            headers=headers)
-                        with urllib.request.urlopen(rel_req, timeout=5) as r:
-                            release = json.loads(r.read().decode())
-                        for asset in release.get("assets", []):
-                            name = asset.get("name", "").lower()
-                            if name.endswith(".exe") and "setup" in name:
-                                dl_url = asset.get("browser_download_url", tags_page)
-                                break
-                    except Exception:
-                        pass  # no release for this tag, tags page fallback is fine
-                    self._latest_url = dl_url
-                    QTimer.singleShot(0, lambda: self._show_update_available(latest_tag))
-                else:
-                    QTimer.singleShot(0, lambda: (self.ver_label.setText(f"v{CURRENT_VERSION} (Latest)"), self.ver_label.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0; color: inherit; text-align: left; }")))
+                    dl_url = (
+                        f"https://github.com/{GITHUB_REPO}/releases/download/"
+                        f"{latest_tag}/ChatGate_Setup.exe"
+                    )
 
-            except Exception:
-                QTimer.singleShot(0, lambda: (self.ver_label.setText(f"v{CURRENT_VERSION}"), self.ver_label.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0; color: inherit; text-align: left; }")))
+                    print("Download URL:", dl_url)
+                    print("UI: UPDATE AVAILABLE triggered")
+
+                    # Use thread-safe method invocation
+                    self._latest_tag = latest_tag
+                    self._latest_url = dl_url
+                    QMetaObject.invokeMethod(self, "_show_update_available", Qt.QueuedConnection, Q_ARG(str, latest_tag))
+                else:
+                    print("No update found — already latest")
+                    QMetaObject.invokeMethod(self, "_show_latest", Qt.QueuedConnection)
+
+                print("=== UPDATE CHECK END ===\n")
+
+            except Exception as e:
+                print("Update check FAILED:", e)
+                QMetaObject.invokeMethod(self, "_show_latest", Qt.QueuedConnection)
 
         threading.Thread(target=_check, daemon=True).start()
 
+    @pyqtSlot()
+    def _show_latest(self):
+        self.ver_label.setText(f"v{CURRENT_VERSION} (Latest)")
+        self.ver_label.setStyleSheet("")
+
+    @pyqtSlot(str)
     def _show_update_available(self, tag):
         self.ver_label.setText(f"⬆ UPDATE AVAILABLE: {tag}  (click to install)")
-        self.ver_label.setStyleSheet(
-            "QPushButton { background: transparent; border: none; padding: 0; "
-            "color: #00ff7f; font-weight: bold; text-align: left; }")
+        self.ver_label.setStyleSheet("color: #00ff7f; font-weight: bold;")
 
     def _on_update_clicked(self):
         """Called when the user clicks the version label."""
@@ -1322,10 +1350,9 @@ class ChatGateMain(QWidget):
             return
 
         url = self._latest_url
-        if not url or not url.endswith(".exe"):
-            # No direct asset found — fall back to opening the releases page
+        if not url:
             import webbrowser
-            webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases")
+            webbrowser.open(f"https://github.com/{GITHUB_REPO}/tags")
             return
 
         # Download the installer to a temp file then launch it
