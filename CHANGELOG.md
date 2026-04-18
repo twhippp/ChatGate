@@ -8,7 +8,7 @@
 - **YouTube Subscriber Bypass**: Added separate bypass option for free YouTube subscribers (distinct from paid Members)
 
 ### Changes
-- **MPS Calculation**: YouTube and TikTok now update MPS every second (matching Twitch behavior)
+- **MPS Calculation**: YouTube now updates MPS every second (matching Twitch behavior)
 
 ### Bug Fixes
 - Fixed app not fully closing when clicking X with "Minimize to tray on close" unchecked
