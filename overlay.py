@@ -65,6 +65,7 @@ class ChatOverlay(QWidget):
 
     @pyqtSlot(str)
     def add_message(self, html):
+        print(f"OVERLAY received: {html[:50]}...")
         self.chat_display.append(html)
         self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
 

@@ -1,38 +1,48 @@
 # ChatGate
 
-**Dynamic Transparent Overlay & Smart Filter for Twitch and YouTube**
+**Dynamic Transparent Overlay & Smart Filter for Twitch & YouTube**
 
-ChatGate is a high-performance, dual-window live chat monitor designed for streamers. It features a transparent, click-through overlay that sits directly over your games, paired with a powerful controller to filter out spam and low-value messages in real-time. Supports both Twitch and YouTube Live simultaneously.
+ChatGate is a high-performance, dual-window live chat monitor designed for streamers. It features a transparent, click-through overlay that sits directly over your games, paired with a powerful controller to filter out spam and low-value messages in real-time. Supports Twitch and YouTube Live simultaneously.
 
 ## Key Features
 
 - **Dual-Window Architecture**: A dedicated **Controller** for settings and an **Invisible Overlay** for the game.
 - **Click-Through Overlay**: The chat stays on top of your game but doesn't intercept mouse clicks.
 - **Smart Logic Gate**: Automatically activates filters only when chat speed (MPS) exceeds your threshold.
-- **Multi-Platform**: Connect to **Twitch** and **YouTube Live** at the same time — messages from both feed into a single unified overlay.
-- **Platform Badges**: Each message shows a Twitch or YouTube icon so you always know where it came from.
-- **Role Bypass**: Ensure Mod, VIP, Sub, and YouTube Member messages always break through the filter, no matter how fast chat is moving.
+- **Multi-Platform**: Connect to **Twitch** and **YouTube** at the same time — messages from both feed into a single unified overlay.
+- **Platform Badges**: Each message shows a platform icon so you always know where it came from.
+- **Advanced Filtering**: Filter by user whitelist/blacklist, always-block words, and high-volume block words for spam control.
+- **Role Bypass**: Ensure Mod, VIP, Sub, YouTube Members, and YouTube Subscribers messages always break through the filter with granular 3-state controls (Always / Normal / Never).
 - **Customizable Appearance**: Real-time sliders for background opacity, window width, and font scaling.
 - **Dark & Light Theme**: Toggle between themes from the controller.
 - **No-Auth Connection**: Connects anonymously to any Twitch channel. No login required.
 - **Global Hotkey**: Press `Ctrl+Shift+O` to instantly toggle the overlay visibility while in-game.
-- **Auto-Reconnect**: Automatically reconnects with exponential backoff if either platform drops.
+- **Auto-Reconnect**: Automatically reconnects with exponential backoff if any platform drops.
+- **OBS Plugin**: Optional plugin script that auto-launches ChatGate when you open OBS.
 - **System Tray**: Minimize to the system tray to keep things clean while streaming.
 - **Update Checker**: Automatically checks GitHub for newer releases on startup.
 
 ## Installation
 
-1. **Download**: Grab the latest `ChatGate.exe` from the [Releases](https://github.com/twhippp/ChatGate/releases) page.
-2. **Place**: Put the `.exe` in its own folder (it will create a `settings.json` file to remember your preferences and overlay position).
-3. **Run**: Double-click `ChatGate.exe`. No Python installation required.
+1. **Download**: Grab the latest `ChatGate_Setup.exe` from the [Releases](https://github.com/twhippp/ChatGate/releases) page.
+2. **Run the Installer**: Double-click `ChatGate_Setup.exe` and follow the installation wizard.
+3. **Launch**: Once installed, run ChatGate from your Start menu or desktop shortcut. It will create a `settings.json` file in `%APPDATA%\ChatGate\` to store your preferences and overlay position. No Python installation required.
 
 ## Usage
+
+### 🎥 Auto-Launch with OBS
+
+ChatGate includes an OBS Studio plugin that automatically launches ChatGate whenever you start OBS. The plugin is automatically installed and enabled during setup—no configuration needed!
+
+**That's it!** Simply install ChatGate and launch OBS. ChatGate will start automatically every time.
+
+If you ever want to disable it, you can disable or remove the plugin from OBS (**Tools** → **Scripts** → disable `obs-chatgate-launcher`).
 
 ### Connecting
 
 - **Twitch**: Enter a channel name on the Twitch tab and click **Connect**.
 - **YouTube**: Enter a `@handle`, full stream URL, or video ID on the YouTube tab and click **Connect**.
-- Both platforms can be connected simultaneously.
+- Multiple platforms can be connected simultaneously.
 
 ### Positioning the Overlay
 
@@ -42,7 +52,7 @@ ChatGate is a high-performance, dual-window live chat monitor designed for strea
 
 ### Filtering
 
-Adjust the **MPS Limit**. When chat moves faster than this threshold (Messages Per Second), the gate closes and low-effort messages get filtered out — short replies, emote spam, and common phrases like "lol" or "gg". Substantive messages like questions and unique comments still come through. Role Bypass ensures Mods, VIPs, Subs, and YouTube Members always get through regardless of speed.
+Adjust the **MPS Limit**. When chat moves faster than this threshold (Messages Per Second), the gate closes and low-effort messages get filtered out — short replies, emote spam, and common phrases like "lol" or "gg". Substantive messages like questions and unique comments still come through. Role Bypass ensures Mods, VIPs, Subs, YouTube Members, and YouTube Subscribers always get through regardless of chat speed.
 
 ### Visibility & Hotkey
 
@@ -118,7 +128,8 @@ ChatGate/
 
 - **Borderless Windowed Required**: The overlay cannot appear on top of games running in exclusive fullscreen — this is a fundamental Windows limitation affecting all overlay tools including OBS.
 - **Anonymous Twitch Mode**: ChatGate connects via `justinfan`, so it cannot send messages or view Sub-Only chat if the streamer has strict privacy settings enabled.
-- **YouTube**: The channel must be currently live — pytchat cannot read VOD or offline chat.
+- **YouTube**: The channel must be currently live — chat_downloader cannot read VOD or offline chat.
+- **Auto-Launch with OBS**: ChatGate automatically registers itself to start when OBS Studio launches. Use the "Launch with OBS" checkbox in the controller to enable/disable this.
 - **Platform Support**: Optimized for Windows. Also tested and fully functional on Bazzite (Fedora) under ProtonTricks.
 
 ## Contributing

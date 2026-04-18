@@ -8,9 +8,11 @@ import time
 import base64
 import ctypes
 import ctypes.wintypes as wintypes
+import winreg
 from collections import deque
 import urllib.request
 import threading
+import subprocess
 from packaging import version
 
 from PyQt5.QtWidgets import (
@@ -25,7 +27,7 @@ from PyQt5.QtGui import QIcon, QPixmap, QCursor
 from overlay import ChatOverlay
 
 try:
-    from chat_downloader import ChatDownloader
+    import pytchat
     YT_AVAILABLE = True
     YT_ERROR = None
 except ImportError as e:
@@ -34,11 +36,11 @@ except ImportError as e:
 
 # ===================== CONFIG =====================
 SETTINGS_FILE    = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ChatGate", "settings.json")
-CURRENT_VERSION  = "0.4.0-beta"
+CURRENT_VERSION  = "0.4.1-beta"
 GITHUB_REPO      = "twhippp/ChatGate"
 WM_HOTKEY        = 0x0312
 HOTKEY_ID        = 1
-RECONNECT_DELAYS = [3, 5, 10, 30, 60]
+RECONNECT_DELAYS = [5, 15, 30, 60, 120]
 
 BYPASS_OPTIONS = ["Always", "Normal", "Never"]
 
@@ -106,7 +108,14 @@ def _svg_to_pixmap(svg_bytes, size=16):
     return pixmap
 
 def _platform_badge_html(platform):
-    svg = TWITCH_SVG if platform == "twitch" else YOUTUBE_SVG
+    if platform == "twitch":
+        svg = TWITCH_SVG
+        fallback = "<span style='color:#9146FF;font-size:0.8em'>[T]</span> "
+    elif platform == "youtube":
+        svg = YOUTUBE_SVG
+        fallback = "<span style='color:#FF0000;font-size:0.8em'>[YT]</span> "
+    else:
+        return ""  # No badge for unknown platforms
     try:
         from PyQt5.QtCore import QBuffer, QIODevice
         pm   = _svg_to_pixmap(svg, 14)
@@ -116,8 +125,7 @@ def _platform_badge_html(platform):
         b64 = base64.b64encode(qbuf.data().data()).decode()
         return f"<img src='data:image/png;base64,{b64}' width='12' height='12' style='vertical-align:middle;'> "
     except Exception:
-        return "<span style='color:#9146FF;font-size:0.8em'>[T]</span> " if platform == "twitch" \
-               else "<span style='color:#FF0000;font-size:0.8em'>[YT]</span> "
+        return fallback
 
 # ===================== EVENT FORMATTERS =====================
 def fmt_raid(from_user, viewer_count):
@@ -188,7 +196,8 @@ SETTINGS_DEFAULTS = {
     "bypass_mod":         "Normal",
     "bypass_vip":         "Normal",
     "bypass_sub":         "Normal",
-    "bypass_yt_member":   "Normal",
+    "bypass_yt_member":    "Normal",
+    "bypass_yt_subscriber": "Normal",
     "always_block_words":  [],
     "volume_block_words":  [],
     "user_whitelist":      [],
@@ -196,9 +205,10 @@ SETTINGS_DEFAULTS = {
     "show_raids":          True,
     "show_subs":           True,
     "show_bits":           True,
-    "show_announcements":  True,
+"show_announcements":  True,
     "show_first_chat":     False,
-    "show_watch_streaks":  True,
+    "show_watch_streaks": True,
+    "launch_with_obs":   False,
 }
 
 def migrate_settings(raw):
@@ -265,18 +275,41 @@ def resolve_video_id(user_input):
     if VIDEO_ID_RE.match(s): return s
     m = WATCH_RE.search(s)
     if m: return m.group(1)
+    
+    # Try live pages first (most specific)
     for url in [
         f"https://www.youtube.com/@{s}/live",
-        f"https://www.youtube.com/@{s}",
         f"https://www.youtube.com/c/{s}/live",
-        f"https://www.youtube.com/c/{s}",
         f"https://www.youtube.com/user/{s}/live",
     ]:
         try:
-            vid = _extract_video_id_from_html(_fetch(url))
-            if vid: return vid
-        except Exception:
+            print(f"YT resolving: {url}")
+            html = _fetch(url)
+            vid = _extract_video_id_from_html(html)
+            if vid:
+                print(f"YT resolved {url} -> {vid}")
+                return vid
+        except Exception as e:
+            print(f"YT failed to resolve {url}: {e}")
             continue
+    
+    # Fallback to channel pages if no live found
+    for url in [
+        f"https://www.youtube.com/@{s}",
+        f"https://www.youtube.com/c/{s}",
+        f"https://www.youtube.com/user/{s}",
+    ]:
+        try:
+            print(f"YT resolving (fallback): {url}")
+            html = _fetch(url)
+            vid = _extract_video_id_from_html(html)
+            if vid:
+                print(f"YT resolved {url} -> {vid}")
+                return vid
+        except Exception as e:
+            print(f"YT failed to resolve {url}: {e}")
+            continue
+    
     return None
 
 # ===================== UPDATER THREAD =====================
@@ -437,9 +470,16 @@ class IRCThread(QThread):
         self.event_flags = event_flags
         self.msg_times   = deque()
         self.is_running  = True
+        self.sock        = None
 
     def stop(self):
         self.is_running = False
+        # Close socket to interrupt blocking recv()
+        if self.sock:
+            try:
+                self.sock.close()
+            except:
+                pass
 
     def _should_show(self, user, msg, roles, mps):
         f = self.filters
@@ -516,7 +556,8 @@ class IRCThread(QThread):
         return None
 
     def run(self):
-        sock = socket.socket()
+        self.sock = socket.socket()
+        sock = self.sock
 
         def _tick():
             while self.is_running:
@@ -616,31 +657,38 @@ class YouTubeThread(QThread):
 
     def __init__(self, handle, threshold, bypass_member, filters):
         super().__init__()
-        self.handle        = handle
-        self.threshold     = threshold
-        self.bypass_member = bypass_member
-        self.filters       = filters
-        self.msg_times     = deque()
-        self.is_running    = True
+        self.handle         = handle
+        self.threshold      = threshold
+        self.bypass_member  = bypass_member
+        self.filters        = filters
+        self.msg_times      = deque()
+        self.is_running     = True
 
     def stop(self):
         self.is_running = False
 
     def _should_show(self, user, msg, is_member, mps):
         f = self.filters
-        if user.lower() in [u.lower() for u in f.get("user_blacklist", [])]: return False
-        if user.lower() in [u.lower() for u in f.get("user_whitelist", [])]: return True
+        if user.lower() in [u.lower() for u in f.get("user_blacklist", [])]: 
+            return False
+        if user.lower() in [u.lower() for u in f.get("user_whitelist", [])]: 
+            return True
         msg_lower = msg.lower()
         for word in f.get("always_block_words", []):
-            if word.lower() in msg_lower: return False
+            if word.lower() in msg_lower: 
+                return False
         is_filtering = mps >= self.threshold
         if is_filtering:
             for word in f.get("volume_block_words", []):
-                if word.lower() in msg_lower: return False
+                if word.lower() in msg_lower: 
+                    return False
         if is_member:
-            if self.bypass_member == "Always": return True
-            if self.bypass_member == "Never":  return False
-        if is_filtering: return False
+            if self.bypass_member == "Always": 
+                return True
+            if self.bypass_member == "Never":  
+                return False
+        if is_filtering: 
+            return False
         return True
 
     def run(self):
@@ -648,7 +696,8 @@ class YouTubeThread(QThread):
         video_id = resolve_video_id(self.handle)
         if not video_id:
             self.status_msg.emit("Error: Could not find live stream")
-            if self.is_running: self.disconnected.emit()
+            if self.is_running: 
+                self.disconnected.emit()
             return
 
         self.status_msg.emit(f"Connecting... (ID: {video_id})")
@@ -661,36 +710,47 @@ class YouTubeThread(QThread):
                     self.msg_times.popleft()
                 mps = len(self.msg_times) / self.CHAT_RATE_WINDOW
                 self.stats_update.emit(mps, mps >= self.threshold)
+        
         threading.Thread(target=_tick, daemon=True).start()
 
         try:
-            url  = f"https://www.youtube.com/watch?v={video_id}"
-            chat = ChatDownloader().get_chat(url, message_types=['text_message'])
+            import pytchat
+            
+            chat = pytchat.create(video_id=video_id, interruptable=False)
+            if not chat.is_alive():
+                self.status_msg.emit("Error: Chat not active")
+                if self.is_running: 
+                    self.disconnected.emit()
+                return
+            
             self.status_msg.emit("Connected")
 
-            for message in chat:
-                if not self.is_running: break
-                now = time.time()
-                self.msg_times.append(now)
-                while self.msg_times and now - self.msg_times[0] > self.CHAT_RATE_WINDOW:
-                    self.msg_times.popleft()
-                mps = len(self.msg_times) / self.CHAT_RATE_WINDOW
-                self.stats_update.emit(mps, mps >= self.threshold)
+            while self.is_running and chat.is_alive():
+                for item in chat.get().sync_items():
+                    if not self.is_running: 
+                        break
+                    
+                    now = time.time()
+                    self.msg_times.append(now)
+                    while self.msg_times and now - self.msg_times[0] > self.CHAT_RATE_WINDOW:
+                        self.msg_times.popleft()
+                    mps = len(self.msg_times) / self.CHAT_RATE_WINDOW
+                    is_filtering = mps >= self.threshold
+                    self.stats_update.emit(mps, is_filtering)
 
-                user      = message.get('author', {}).get('name', 'User')
-                msg       = message.get('message', '')
-                badges    = message.get('author', {}).get('badges', [])
-                is_member = any('member' in b.get('title', '').lower() for b in badges)
+                    is_member = bool(item.author.badgeUrl)
+                    user = item.author.name
+                    msg = item.message
 
-                if not msg: continue
-                if self._should_show(user, msg, is_member, mps):
-                    color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
-                    self.message.emit(
-                        f"{_platform_badge_html('youtube')}"
-                        f"<span style='color:{color}'><b>{user}</b></span>: {msg}")
+                    if self._should_show(user, msg, is_member, mps):
+                        badge = _platform_badge_html("youtube")
+                        color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
+                        self.message.emit(
+                            f"{badge}<span style='color:{color}'><b>{user}</b></span>: {msg}")
 
         except Exception as e:
-            self.status_msg.emit(f"Error: {e}")
+            print(f"YT Error: {e}")
+            pass
         finally:
             if self.is_running:
                 self.status_msg.emit("Disconnected")
@@ -701,6 +761,8 @@ class ChatGateMain(QWidget):
     def __init__(self):
         super().__init__()
         self.settings    = load_settings()
+        self._loading_settings = True
+        self._obs_toggling = False
         self.dark_mode   = self.settings.get("dark_mode", True)
         self.setWindowTitle("ChatGate")
         self.resize(500, 800)
@@ -752,6 +814,8 @@ class ChatGateMain(QWidget):
         }
 
     def save_settings(self):
+        if getattr(self, '_obs_toggling', False):
+            return
         data = {
             "twitch_channel":     self.twitch_input.text(),
             "yt_handle":          self.yt_input.text(),
@@ -765,11 +829,14 @@ class ChatGateMain(QWidget):
             "font_size":          self.font_spin.value(),
             "minimize_to_tray":   self.minimize_to_tray_check.isChecked(),
             "combined_mps":       self.combined_mps_check.isChecked(),
+            "launch_with_obs":   self.launch_with_obs_check.isChecked(),
             "bypass_broadcaster": self.bp_broadcaster.currentText(),
             "bypass_mod":         self.bp_mod.currentText(),
             "bypass_vip":         self.bp_vip.currentText(),
             "bypass_sub":         self.bp_sub.currentText(),
-            "bypass_yt_member":   self.bp_yt_member.currentText(),
+            "bypass_yt_member":    self.bp_yt_member.currentText(),
+            "bypass_yt_subscriber": self.bp_yt_subscriber.currentText(),
+
             "always_block_words": self.always_block_list.get_items(),
             "volume_block_words": self.volume_block_list.get_items(),
             "user_whitelist":     self.user_whitelist.get_items(),
@@ -777,6 +844,34 @@ class ChatGateMain(QWidget):
             **self._get_event_flags(),
         }
         save_settings_to_file(data)
+
+    def _toggle_launch_with_obs(self, state):
+        if getattr(self, '_loading_settings', False) or self._obs_toggling:
+            return
+
+        self._obs_toggling = True
+        target_state = (state == 2)
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        ps1_path = os.path.join(script_dir, "find-obs.ps1")
+
+        if not os.path.exists(ps1_path):
+            self._obs_toggling = False
+            return
+
+        try:
+            if target_state:
+                subprocess.run(
+                    ["powershell", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path],
+                    check=True, capture_output=True)
+            else:
+                subprocess.run(
+                    ["powershell", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path, "-Disable"],
+                    check=True, capture_output=True)
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            self._obs_toggling = False
 
     def _get_filters(self):
         return {
@@ -799,6 +894,8 @@ class ChatGateMain(QWidget):
         self._current_accent = accent
         self.setStyleSheet(get_theme(self.dark_mode, accent))
         self.theme_btn.setText("☀ Light Mode" if self.dark_mode else "☾ Dark Mode")
+
+
 
     def toggle_theme(self):
         self.dark_mode = not self.dark_mode
@@ -837,16 +934,41 @@ class ChatGateMain(QWidget):
         self.showNormal(); self.activateWindow(); self.raise_()
 
     def quit_app(self):
-        self.overlay.hide(); self.tray.hide(); QApplication.quit()
+        """Properly shut down all threads and close the application"""
+        self._stop_all_threads()
+        self.overlay.hide()
+        self.tray.hide()
+        QApplication.quit()
+
+    def _stop_all_threads(self):
+        """Stop all chat threads gracefully"""
+        if self.irc is not None and self.irc.is_running:
+            self.irc.is_running = False
+            try:
+                self.irc.wait(timeout=2000)
+            except:
+                pass
+        if self.yt is not None and self.yt.is_running:
+            self.yt.is_running = False
+            try:
+                self.yt.wait(timeout=2000)
+            except:
+                pass
 
     def closeEvent(self, event):
         if self.minimize_to_tray_check.isChecked():
-            event.ignore(); self.hide()
+            event.ignore()
+            self.hide()
             self.tray.showMessage("ChatGate",
                 "Running in the background. Double-click the tray icon to restore.",
                 QSystemTrayIcon.Information, 2000)
         else:
-            self.overlay.hide(); self.tray.hide(); event.accept()
+            # User wants to close, so shut everything down
+            self._stop_all_threads()
+            self.overlay.hide()
+            self.tray.hide()
+            event.accept()
+            QApplication.quit()
 
     def _set_win32_icon(self):
         try:
@@ -942,9 +1064,18 @@ class ChatGateMain(QWidget):
         self.minimize_to_tray_check = QCheckBox("Minimize to tray on close")
         self.minimize_to_tray_check.setChecked(self.settings.get("minimize_to_tray", True))
         self.minimize_to_tray_check.stateChanged.connect(self.save_settings)
+
+        self.launch_with_obs_check = QCheckBox("Launch with OBS")
+        checked = self.settings.get("launch_with_obs", False)
+        self.launch_with_obs_check.setChecked(checked)
+        self.launch_with_obs_check.stateChanged.connect(self._toggle_launch_with_obs)
+        self.launch_with_obs_check.stateChanged.connect(self.save_settings)
+        self._loading_settings = False
+
         self.theme_btn = QPushButton("")
         self.theme_btn.clicked.connect(self.toggle_theme)
         bottom_row.addWidget(self.minimize_to_tray_check); bottom_row.addStretch()
+        bottom_row.addWidget(self.launch_with_obs_check); bottom_row.addStretch()
         bottom_row.addWidget(self.theme_btn)
         layout.addLayout(bottom_row)
 
@@ -1056,6 +1187,11 @@ class ChatGateMain(QWidget):
         self.bp_yt_member = self._bypass_combo("bypass_yt_member")
         r = QHBoxLayout(); lbl = QLabel("Members:"); lbl.setFixedWidth(90)
         r.addWidget(lbl); r.addWidget(self.bp_yt_member); r.addStretch()
+        lay.addLayout(r)
+
+        self.bp_yt_subscriber = self._bypass_combo("bypass_yt_subscriber")
+        r = QHBoxLayout(); lbl = QLabel("Subscribers:"); lbl.setFixedWidth(90)
+        r.addWidget(lbl); r.addWidget(self.bp_yt_subscriber); r.addStretch()
         lay.addLayout(r)
 
         if not YT_AVAILABLE:
@@ -1183,8 +1319,10 @@ class ChatGateMain(QWidget):
             try: self.yt.disconnected.disconnect()
             except: pass
         self.yt = YouTubeThread(
-            self._last_yt_handle, self.mps_spin.value(),
-            self.bp_yt_member.currentText(), self._get_filters())
+            self._last_yt_handle, 
+            self.mps_spin.value(),
+            self.bp_yt_member.currentText(), 
+            self._get_filters())
         self.yt.message.connect(self.overlay.add_message)
         self.yt.stats_update.connect(lambda m, f: self._update_stats(m, f, "youtube"))
         self.yt.status_msg.connect(lambda s: self.yt_status.setText(s.upper()))
@@ -1214,8 +1352,10 @@ class ChatGateMain(QWidget):
         if self.yt  is not None: self.yt.threshold  = threshold
 
         if not combined:
-            if platform == "twitch": self._twitch_mps = mps
-            else:                    self._yt_mps     = mps
+            if platform == "twitch":
+                self._twitch_mps = mps
+            elif platform == "youtube":
+                self._yt_mps = mps
 
         is_filtering = mps >= threshold
         gate_color   = "#ff4444" if is_filtering else "#44cc44"
@@ -1228,14 +1368,14 @@ class ChatGateMain(QWidget):
             if platform == "twitch":
                 self.twitch_status.setText(status_text)
                 self.twitch_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
-            else:
+            elif platform == "youtube":
                 self.yt_status.setText(status_text)
                 self.yt_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
         else:
             if platform == "twitch":
                 self.twitch_status.setText(status_text)
                 self.twitch_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
-            else:
+            elif platform == "youtube":
                 self.yt_status.setText(status_text)
                 self.yt_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
             twitch_active = self.irc is not None and self.irc.is_running
@@ -1388,12 +1528,7 @@ class ChatGateMain(QWidget):
             f"https://github.com/{GITHUB_REPO}/releases")
 
 # ===================== ENTRY =====================
-if __name__ == "__main__":
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ChatGate.App")
-    except Exception:
-        pass
-
+def run_app():
     app = QApplication(sys.argv)
     app.setApplicationName("ChatGate")
     app.setOrganizationName("ChatGate")
@@ -1402,3 +1537,11 @@ if __name__ == "__main__":
     w = ChatGateMain()
     w.show()
     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ChatGate.App")
+    except Exception:
+        pass
+
+    run_app()

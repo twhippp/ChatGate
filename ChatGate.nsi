@@ -8,7 +8,7 @@
 
 ; ---------- Metadata ----------
 !define APP_NAME        "ChatGate"
-!define APP_VERSION     "0.4.0-beta"
+!define APP_VERSION     "0.4.1-beta"
 !define APP_PUBLISHER   "twhippp"
 !define APP_URL         "https://github.com/twhippp/ChatGate"
 !define APP_EXE         "ChatGate.exe"
@@ -92,6 +92,12 @@ Section "Install" SecMain
                        "$INSTDIR\${APP_EXE}" "" "$INSTDIR\ChatGate.ico"
     ${EndIf}
 
+    ; OBS Plugin Script - combined script that finds OBS and installs/enables
+    File "find-obs.ps1"
+
+    ; Find OBS scripts folder, copy lua, and enable
+    nsExec::ExecToLog 'PowerShell -ExecutionPolicy Bypass -File "$INSTDIR\find-obs.ps1"'
+
     ; Uninstaller
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
@@ -113,6 +119,7 @@ Section "Uninstall"
 
     Delete "$INSTDIR\${APP_EXE}"
     Delete "$INSTDIR\ChatGate.ico"
+    Delete "$INSTDIR\find-obs.ps1"
     Delete "$INSTDIR\Uninstall.exe"
     RMDir  "$INSTDIR"
 
@@ -121,6 +128,12 @@ Section "Uninstall"
     RMDir  "$SMPROGRAMS\${APP_NAME}"
 
     Delete "$DESKTOP\${APP_NAME}.lnk"
+
+    ; Remove OBS plugin script from all known locations
+    Delete "$APPDATA\obs-studio\scripts\obs-chatgate-launcher.lua"
+    Delete "C:\Program Files (x86)\Steam\steamapps\common\OBS Studio\data\obs-plugins\frontend-tools\scripts\obs-chatgate-launcher.lua"
+    Delete "C:\Program Files\OBS Studio\data\obs-plugins\frontend-tools\scripts\obs-chatgate-launcher.lua"
+    Delete "C:\OBS Studio\data\obs-plugins\frontend-tools\scripts\obs-chatgate-launcher.lua"
 
     ; Optional: remove settings
     ; RMDir /r "$APPDATA\${APP_NAME}"
