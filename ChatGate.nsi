@@ -8,7 +8,7 @@
 
 ; ---------- Metadata ----------
 !define APP_NAME        "ChatGate"
-!define APP_VERSION     "0.4.1-beta"
+!define APP_VERSION     "1.0.0"
 !define APP_PUBLISHER   "twhippp"
 !define APP_URL         "https://github.com/twhippp/ChatGate"
 !define APP_EXE         "ChatGate.exe"

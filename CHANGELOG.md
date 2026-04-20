@@ -1,5 +1,27 @@
 # ChatGate Changelog
 
+## v1.0 (ongoing)
+
+### New Features
+- **Kick.live Support**: New platform integration with Kick.live chat monitoring - green accent color
+- **TikTok Support**: New platform integration with TikTok live chat monitoring - black accent color
+- **Modular Architecture**: Twitch, YouTube, Kick, and TikTok now in separate modules for better maintainability
+- **Disconnect Button**: Quick way to stop streaming on any platform without closing the app
+- **Link Previews**: Automatically fetches and displays metadata (title, description) for URLs in chat messages
+- **Moderator Message Removal**: Automatically removes messages from overlay when Twitch mods delete them in real-time
+
+### Platform Support
+- **Kick**: Channel input, verified user filtering (Always/Normal/Never), MPS-based filtering, auto-reconnection
+- **TikTok**: Handle input (@username), follower filtering (Always/Normal/Never), event support (comments, likes, gifts, follows, shares), auto-reconnection
+
+### Implementation Details
+- Added `kick.py`, `youtube.py`, `twitch.py`, `tiktok.py` module files for clean separation of concerns
+- Added `LinkPreviewThread` class in overlay.py for async metadata fetching
+- Added mod deletion detection via IRC `CLEARCHAT` and `CLEARMSG` commands
+- Added "Show Link Previews" checkbox in Filters tab
+
+---
+
 ## v0.4.1-beta
 
 ### New Features

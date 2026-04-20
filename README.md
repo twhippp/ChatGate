@@ -1,21 +1,33 @@
 # ChatGate
 
-**Dynamic Transparent Overlay & Smart Filter for Twitch & YouTube**
+**Dynamic Transparent Overlay & Smart Filter for Twitch, YouTube, Kick & TikTok**
 
-ChatGate is a high-performance, dual-window live chat monitor designed for streamers. It features a transparent, click-through overlay that sits directly over your games, paired with a powerful controller to filter out spam and low-value messages in real-time. Supports Twitch and YouTube Live simultaneously.
+ChatGate is a high-performance, multi-platform live chat monitor designed for streamers. It features a transparent, click-through overlay that sits directly over your games, paired with a powerful controller to filter out spam and low-value messages in real-time. Supports Twitch, YouTube, Kick, and TikTok Live simultaneously.
+
+## Platform Status
+
+| Platform | Status | Notes |
+| :--- | :--- | :--- |
+| **Twitch** | ✅ Stable | Fully implemented and tested |
+| **YouTube** | ✅ Stable | Fully implemented and tested |
+| **Kick** | 🔧 In Development | Basic support available, full WebSocket implementation pending (Only available by building yourself) | 
+| **TikTok** | 🔧 In Development/not publically available | Basic support available, API reliability pending (Only available by building yourself) | 
 
 ## Key Features
 
-- **Dual-Window Architecture**: A dedicated **Controller** for settings and an **Invisible Overlay** for the game.
+- **Dual-Window Architecture**: A dedicated **Controller** for settings and an **Overlay** for the game.
 - **Click-Through Overlay**: The chat stays on top of your game but doesn't intercept mouse clicks.
 - **Smart Logic Gate**: Automatically activates filters only when chat speed (MPS) exceeds your threshold.
-- **Multi-Platform**: Connect to **Twitch** and **YouTube** at the same time — messages from both feed into a single unified overlay.
+- **Multi-Platform**: Connect to **Twitch**, **YouTube**, **Kick**, and **TikTok** simultaneously — messages from all feed into a single unified overlay.
 - **Platform Badges**: Each message shows a platform icon so you always know where it came from.
 - **Advanced Filtering**: Filter by user whitelist/blacklist, always-block words, and high-volume block words for spam control.
-- **Role Bypass**: Ensure Mod, VIP, Sub, YouTube Members, and YouTube Subscribers messages always break through the filter with granular 3-state controls (Always / Normal / Never).
+- **Role Bypass**: Ensure Mod, VIP, Sub, YouTube Members, YouTube Subscribers, Kick Verified, and TikTok Followers messages always break through with granular 3-state controls (Always / Normal / Never).
+- **Disconnect Button**: Quickly stop any platform connection without closing the app or disconnecting other platforms.
+- **Link Previews**: Automatically fetches and displays metadata (title, description) for URLs shared in chat.
+- **Moderator Sync** (Twitch): Automatically removes messages when Twitch mods delete them in real-time.
 - **Customizable Appearance**: Real-time sliders for background opacity, window width, and font scaling.
 - **Dark & Light Theme**: Toggle between themes from the controller.
-- **No-Auth Connection**: Connects anonymously to any Twitch channel. No login required.
+- **No-Auth Connection**: Connects anonymously. No login required for Twitch or Kick.
 - **Global Hotkey**: Press `Ctrl+Shift+O` to instantly toggle the overlay visibility while in-game.
 - **Auto-Reconnect**: Automatically reconnects with exponential backoff if any platform drops.
 - **OBS Plugin**: Optional plugin script that auto-launches ChatGate when you open OBS.
@@ -42,7 +54,10 @@ If you ever want to disable it, you can disable or remove the plugin from OBS (*
 
 - **Twitch**: Enter a channel name on the Twitch tab and click **Connect**.
 - **YouTube**: Enter a `@handle`, full stream URL, or video ID on the YouTube tab and click **Connect**.
+- **Kick**: Enter a channel name on the Kick tab and click **Connect**.
+- **TikTok**: Enter a `@handle` on the TikTok tab and click **Connect**.
 - Multiple platforms can be connected simultaneously.
+- Use the **Disconnect** button to stop any platform without closing the app.
 
 ### Positioning the Overlay
 
@@ -66,10 +81,10 @@ Use the **Opacity** slider to blend the chat into your game's UI. Press `Ctrl+Sh
 | :--- | :--- |
 | **Toggle Overlay** | `Ctrl + Shift + O` |
 | **Move Chat Window** | Unlock via Controller → Drag Handle |
-| **Adjust Width** | Width Slider in Controller |
 | **Adjust Opacity** | Opacity Slider in Controller |
 | **Switch Theme** | Theme button in Controller |
 | **Minimize to Tray** | Close button (if "Minimize to tray on close" is checked) |
+| **Launch with OBS** | ChatGate will launch when you launch OBS
 
 ## For Developers
 
@@ -126,11 +141,10 @@ ChatGate/
 
 ## Notes
 
-- **Borderless Windowed Required**: The overlay cannot appear on top of games running in exclusive fullscreen — this is a fundamental Windows limitation affecting all overlay tools including OBS.
 - **Anonymous Twitch Mode**: ChatGate connects via `justinfan`, so it cannot send messages or view Sub-Only chat if the streamer has strict privacy settings enabled.
-- **YouTube**: The channel must be currently live — chat_downloader cannot read VOD or offline chat.
+- **YouTube**: The channel must be currently live — pytchat cannot read VOD or offline chat.
 - **Auto-Launch with OBS**: ChatGate automatically registers itself to start when OBS Studio launches. Use the "Launch with OBS" checkbox in the controller to enable/disable this.
-- **Platform Support**: Optimized for Windows. Also tested and fully functional on Bazzite (Fedora) under ProtonTricks.
+- **Platform Support**: Optimized for Windows
 
 ## Contributing
 

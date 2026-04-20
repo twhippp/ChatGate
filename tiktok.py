@@ -1,7 +1,6 @@
 """
 TikTok Support Module for ChatGate
-This module contains all TikTok-related functionality that was removed from the main app.
-Can be integrated back into main.py in the future.
+This module contains all TikTok-related functionality.
 
 Author: ChatGate Contributors
 Date: April 2026
@@ -10,9 +9,6 @@ Date: April 2026
 import time
 import threading
 from collections import deque
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox
-)
 from PyQt5.QtCore import QThread, pyqtSignal
 
 # TikTok imports - may need to be installed
@@ -26,7 +22,6 @@ except ImportError as e:
     TT_ERROR = str(e)
 
 
-# ===================== TIKTOK THREAD =====================
 class TikTokThread(QThread):
     message      = pyqtSignal(str)
     stats_update = pyqtSignal(float, bool)

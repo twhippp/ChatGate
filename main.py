@@ -34,9 +34,34 @@ except ImportError as e:
     YT_AVAILABLE = False
     YT_ERROR = str(e)
 
+try:
+    from twitch import IRCThread
+except ImportError:
+    IRCThread = None
+
+try:
+    from youtube import YouTubeThread, resolve_video_id
+except ImportError:
+    YouTubeThread = None
+    resolve_video_id = None
+
+try:
+    from kick import KickThread, KICK_AVAILABLE, KICK_ERROR
+except ImportError:
+    KickThread = None
+    KICK_AVAILABLE = False
+    KICK_ERROR = "Kick support module not available"
+
+try:
+    from tiktok import TikTokThread, TT_AVAILABLE, TT_ERROR
+except ImportError:
+    TikTokThread = None
+    TT_AVAILABLE = False
+    TT_ERROR = "TikTok support module not available"
+
 # ===================== CONFIG =====================
 SETTINGS_FILE    = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ChatGate", "settings.json")
-CURRENT_VERSION  = "0.4.1-beta"
+CURRENT_VERSION  = "1.0.0"
 GITHUB_REPO      = "twhippp/ChatGate"
 WM_HOTKEY        = 0x0312
 HOTKEY_ID        = 1
@@ -46,11 +71,15 @@ BYPASS_OPTIONS = ["Always", "Normal", "Never"]
 
 TAB_TWITCH  = 0
 TAB_YOUTUBE = 1
-TAB_FILTERS = 2
+TAB_KICK    = 2
+TAB_TIKTOK  = 3
+TAB_FILTERS = 4
 
 ACCENT = {
     TAB_TWITCH:  "#9146FF",
     TAB_YOUTUBE: "#FF0000",
+    TAB_KICK:    "#00D084",
+    TAB_TIKTOK:  "#000000",
     TAB_FILTERS: "#9146FF",
 }
 
@@ -95,6 +124,14 @@ YOUTUBE_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <path fill="#FF0000" d="M23.495 6.205a3.007 3.007 0 0 0-2.088-2.088c-1.87-.501-9.396-.501-9.396-.501s-7.507-.01-9.396.501A3.007 3.007 0 0 0 .527 6.205a31.247 31.247 0 0 0-.522 5.805 31.247 31.247 0 0 0 .522 5.783 3.007 3.007 0 0 0 2.088 2.088c1.868.502 9.396.502 9.396.502s7.506 0 9.396-.502a3.007 3.007 0 0 0 2.088-2.088 31.247 31.247 0 0 0 .5-5.783 31.247 31.247 0 0 0-.5-5.805zM9.609 15.601V8.408l6.264 3.602z"/>
 </svg>"""
 
+KICK_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path fill="#00D084" d="M3 0C1.35 0 0 1.35 0 3v18c0 1.65 1.35 3 3 3h5v-8h4v8h2V0H3zm8 11h-2V8h2v3zm5-11v14h2V0h-2z"/>
+</svg>"""
+
+TIKTOK_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path fill="#000000" d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v12.12a2.84 2.84 0 0 1-2.96 2.82 2.88 2.88 0 0 1-2.96-2.6H5.07a5.78 5.78 0 0 0 5.87 5.55 5.75 5.75 0 0 0 5.75-5.75V9.7a7.4 7.4 0 0 0 4.54-4.09h-3.66z"/>
+</svg>"""
+
 def _svg_to_pixmap(svg_bytes, size=16):
     from PyQt5.QtSvg import QSvgRenderer
     from PyQt5.QtCore import QByteArray
@@ -114,6 +151,12 @@ def _platform_badge_html(platform):
     elif platform == "youtube":
         svg = YOUTUBE_SVG
         fallback = "<span style='color:#FF0000;font-size:0.8em'>[YT]</span> "
+    elif platform == "kick":
+        svg = KICK_SVG
+        fallback = "<span style='color:#00D084;font-size:0.8em'>[KICK]</span> "
+    elif platform == "tiktok":
+        svg = TIKTOK_SVG
+        fallback = "<span style='color:#000000;font-size:0.8em'>[TT]</span> "
     else:
         return ""  # No badge for unknown platforms
     try:
@@ -185,6 +228,8 @@ def get_icon_path():
 SETTINGS_DEFAULTS = {
     "twitch_channel":     "piratesoftware",
     "yt_handle":          "",
+    "kick_channel":       "",
+    "tiktok_handle":      "",
     "mps":                3.0,
     "opacity":            100,
     "pos_x":              100, "pos_y": 100, "width": 400, "height": 600,
@@ -198,6 +243,8 @@ SETTINGS_DEFAULTS = {
     "bypass_sub":         "Normal",
     "bypass_yt_member":    "Normal",
     "bypass_yt_subscriber": "Normal",
+    "bypass_kick_verified": "Normal",
+    "bypass_tiktok_follower": "Normal",
     "always_block_words":  [],
     "volume_block_words":  [],
     "user_whitelist":      [],
@@ -205,10 +252,11 @@ SETTINGS_DEFAULTS = {
     "show_raids":          True,
     "show_subs":           True,
     "show_bits":           True,
-"show_announcements":  True,
+    "show_announcements":  True,
     "show_first_chat":     False,
-    "show_watch_streaks": True,
-    "launch_with_obs":   False,
+    "show_watch_streaks":  True,
+    "launch_with_obs":     False,
+    "show_link_previews":  True,
 }
 
 def migrate_settings(raw):
@@ -244,73 +292,7 @@ def save_settings_to_file(data):
         json.dump(data, f, indent=4)
 
 # ===================== VIDEO ID RESOLUTION =====================
-VIDEO_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{11}$')
-WATCH_RE    = re.compile(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})')
-YT_HEADERS  = {
-    'User-Agent': (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/124.0.0.0 Safari/537.36'
-    ),
-    'Accept-Language': 'en-US,en;q=0.9',
-}
-
-def _fetch(url):
-    req = urllib.request.Request(url, headers=YT_HEADERS)
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return r.read().decode("utf-8", errors="ignore")
-
-def _extract_video_id_from_html(html):
-    for pat in [
-        r'"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"',
-        r'watch\?v=([a-zA-Z0-9_-]{11})',
-        r'canonical.*?watch\?v=([a-zA-Z0-9_-]{11})',
-    ]:
-        m = re.search(pat, html)
-        if m: return m.group(1)
-    return None
-
-def resolve_video_id(user_input):
-    s = user_input.strip().lstrip("@")
-    if VIDEO_ID_RE.match(s): return s
-    m = WATCH_RE.search(s)
-    if m: return m.group(1)
-    
-    # Try live pages first (most specific)
-    for url in [
-        f"https://www.youtube.com/@{s}/live",
-        f"https://www.youtube.com/c/{s}/live",
-        f"https://www.youtube.com/user/{s}/live",
-    ]:
-        try:
-            print(f"YT resolving: {url}")
-            html = _fetch(url)
-            vid = _extract_video_id_from_html(html)
-            if vid:
-                print(f"YT resolved {url} -> {vid}")
-                return vid
-        except Exception as e:
-            print(f"YT failed to resolve {url}: {e}")
-            continue
-    
-    # Fallback to channel pages if no live found
-    for url in [
-        f"https://www.youtube.com/@{s}",
-        f"https://www.youtube.com/c/{s}",
-        f"https://www.youtube.com/user/{s}",
-    ]:
-        try:
-            print(f"YT resolving (fallback): {url}")
-            html = _fetch(url)
-            vid = _extract_video_id_from_html(html)
-            if vid:
-                print(f"YT resolved {url} -> {vid}")
-                return vid
-        except Exception as e:
-            print(f"YT failed to resolve {url}: {e}")
-            continue
-    
-    return None
+# (Moved to youtube.py module)
 
 # ===================== UPDATER THREAD =====================
 class UpdateDownloadThread(QThread):
@@ -454,307 +436,8 @@ def make_tooltip_btn(tip_text, accent="#9146FF"):
     return btn
 
 # ===================== IRC THREAD =====================
-class IRCThread(QThread):
-    message      = pyqtSignal(str)
-    stats_update = pyqtSignal(float, bool)
-    status_msg   = pyqtSignal(str)
-    disconnected = pyqtSignal()
+# (Moved to twitch.py module)
 
-    def __init__(self, channel, threshold, bypass, filters, event_flags):
-        super().__init__()
-        chan = channel.lower().strip().replace("#", "")
-        self.channel     = f"#{chan}"
-        self.threshold   = threshold
-        self.bypass      = bypass
-        self.filters     = filters
-        self.event_flags = event_flags
-        self.msg_times   = deque()
-        self.is_running  = True
-        self.sock        = None
-
-    def stop(self):
-        self.is_running = False
-        # Close socket to interrupt blocking recv()
-        if self.sock:
-            try:
-                self.sock.close()
-            except:
-                pass
-
-    def _should_show(self, user, msg, roles, mps):
-        f = self.filters
-        if user.lower() in [u.lower() for u in f.get("user_blacklist", [])]: return False
-        if user.lower() in [u.lower() for u in f.get("user_whitelist", [])]: return True
-        msg_lower = msg.lower()
-        for word in f.get("always_block_words", []):
-            if word.lower() in msg_lower: return False
-        is_filtering = mps >= self.threshold
-        if is_filtering:
-            for word in f.get("volume_block_words", []):
-                if word.lower() in msg_lower: return False
-        role_result = None
-        for role in roles:
-            rule = self.bypass.get(role, "Normal")
-            if rule == "Always": return True
-            if rule == "Never" and role_result is None: role_result = False
-        if role_result is False: return False
-        if not is_filtering: return True
-        return self._is_substantive(msg_lower)
-
-    LOW_VALUE_EXACT = {
-        "lol","lmao","lmfao","gg","ggs","ez","pog","pogchamp","kekw","omegalul",
-        "pepega","monkas","hi","hello","hey","yo","sup","hype","lets go","let's go",
-        "wow","nice","ok","okay","xd","lul","haha","hahaha","lolol","f","w","l",
-        "rip","oof","based","facts","true","same","real","fr","ngl","imo","bruh",
-        "bro","omg","omfg","wtf","damn","dang","yep","yup","nope","nah","ayy",
-    }
-    REPEAT_CHARS = re.compile(r"(.)\1{4,}")
-
-    def _is_substantive(self, msg_lower):
-        stripped = msg_lower.strip()
-        if len(stripped) < 15:
-            if stripped in self.LOW_VALUE_EXACT: return False
-            if "?" in stripped: return True
-            return False
-        if self.REPEAT_CHARS.search(stripped): return False
-        tokens     = re.findall(r"\b\w+\b", stripped)
-        real_words = [t for t in tokens if len(t) >= 3]
-        if not tokens: return False
-        if len(real_words) / len(tokens) < 0.4: return False
-        if "?" in stripped: return True
-        return len(real_words) >= 4
-
-    def _role_badges_html(self, roles):
-        parts = []
-        if "broadcaster" in roles: parts.append("<span style='color:#FF6B35;font-weight:bold'>[B]</span>")
-        if "mod"         in roles: parts.append("<span style='color:#00AD03;font-weight:bold'>[M]</span>")
-        if "vip"         in roles: parts.append("<span style='color:#FF69B4;font-weight:bold'>[V]</span>")
-        if "sub"         in roles: parts.append("<span style='color:#FFD700;font-weight:bold'>[S]</span>")
-        return " ".join(parts) + (" " if parts else "")
-
-    def _handle_usernotice(self, tags):
-        msg_id  = tags.get("msg-id", "")
-        user    = tags.get("display-name", tags.get("login", "Someone"))
-        sys_msg = tags.get("system-msg", "").replace("\\s", " ")
-
-        if msg_id == "raid" and self.event_flags.get("show_raids"):
-            return fmt_raid(user, tags.get("msg-param-viewerCount", "?"))
-        if msg_id in ("sub", "resub") and self.event_flags.get("show_subs"):
-            return fmt_sub(user, tags.get("msg-param-cumulative-months", ""))
-        if msg_id == "subgift" and self.event_flags.get("show_subs"):
-            return fmt_subgift(user,
-                tags.get("msg-param-recipient-display-name", "someone"),
-                tags.get("msg-param-months", ""))
-        if msg_id in ("submysterygift", "standardpayforward", "communitypayforward") \
-                and self.event_flags.get("show_subs"):
-            return fmt_subgift_bomb(user, tags.get("msg-param-mass-gift-count", "?"))
-        if msg_id == "announcement" and self.event_flags.get("show_announcements"):
-            color = tags.get("msg-param-color", "PRIMARY")
-            return fmt_announcement(user, sys_msg, color) if sys_msg else None
-        if msg_id == "watch-streak" and self.event_flags.get("show_watch_streaks"):
-            return fmt_watch_streak(user, tags.get("msg-param-streak-months", "?"))
-        return None
-
-    def run(self):
-        self.sock = socket.socket()
-        sock = self.sock
-
-        def _tick():
-            while self.is_running:
-                time.sleep(1.0)
-                now = time.time()
-                while self.msg_times and now - self.msg_times[0] > 5.0:
-                    self.msg_times.popleft()
-                mps = len(self.msg_times) / 5.0
-                self.stats_update.emit(mps, mps >= self.threshold)
-
-        threading.Thread(target=_tick, daemon=True).start()
-
-        try:
-            self.status_msg.emit("Connecting...")
-            sock.connect(("irc.chat.twitch.tv", 6667))
-            sock.send(f"NICK justinfan{random.randint(10000, 99999)}\r\n".encode())
-            sock.send(b"CAP REQ :twitch.tv/tags twitch.tv/commands\r\n")
-            sock.send(f"JOIN {self.channel}\r\n".encode())
-            self.status_msg.emit("Connected")
-
-            buf = ""
-            while self.is_running:
-                chunk = sock.recv(4096).decode("utf-8", errors="ignore")
-                if not chunk: break
-                buf += chunk
-                while "\r\n" in buf:
-                    line, buf = buf.split("\r\n", 1)
-                    if not line: continue
-                    if line.startswith("PING"):
-                        sock.send("PONG :tmi.twitch.tv\r\n".encode())
-                        continue
-
-                    tags = {}
-                    rest = line
-                    if rest.startswith("@"):
-                        tag_str, rest = rest[1:].split(" ", 1)
-                        tags = dict(t.split("=", 1) for t in tag_str.split(";") if "=" in t)
-
-                    if "USERNOTICE" in rest:
-                        html = self._handle_usernotice(tags)
-                        if html: self.message.emit(html)
-                        continue
-
-                    if "PRIVMSG" not in rest: continue
-
-                    user = tags.get("display-name", "User")
-                    try:
-                        content = rest.split("PRIVMSG", 1)[1].split(":", 1)[1]
-                    except Exception:
-                        content = ""
-
-                    now = time.time()
-                    self.msg_times.append(now)
-                    while self.msg_times and now - self.msg_times[0] > 5.0:
-                        self.msg_times.popleft()
-                    mps = len(self.msg_times) / 5.0
-                    self.stats_update.emit(mps, mps >= self.threshold)
-
-                    bits = tags.get("bits", "")
-                    if bits and self.event_flags.get("show_bits"):
-                        self.message.emit(fmt_bits(user, bits, content.strip()))
-                        continue
-
-                    badges = tags.get("badges", "")
-                    roles  = []
-                    if "broadcaster" in badges:       roles.append("broadcaster")
-                    if tags.get("mod") == "1":        roles.append("mod")
-                    if "vip" in badges:               roles.append("vip")
-                    if tags.get("subscriber") == "1": roles.append("sub")
-
-                    if tags.get("first-msg") == "1" and self.event_flags.get("show_first_chat"):
-                        self.message.emit(fmt_first_chat(user, content.strip()))
-                        continue
-
-                    if self._should_show(user, content, roles, mps):
-                        color = tags.get("color") or f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
-                        self.message.emit(
-                            f"{_platform_badge_html('twitch')}{self._role_badges_html(roles)}"
-                            f"<span style='color:{color}'><b>{user}</b></span>: {content}")
-
-        except Exception:
-            pass
-        finally:
-            sock.close()
-            if self.is_running:
-                self.status_msg.emit("Disconnected")
-                self.disconnected.emit()
-
-# ===================== YOUTUBE THREAD =====================
-class YouTubeThread(QThread):
-    message      = pyqtSignal(str)
-    stats_update = pyqtSignal(float, bool)
-    status_msg   = pyqtSignal(str)
-    disconnected = pyqtSignal()
-
-    CHAT_RATE_WINDOW = 5.0
-
-    def __init__(self, handle, threshold, bypass_member, filters):
-        super().__init__()
-        self.handle         = handle
-        self.threshold      = threshold
-        self.bypass_member  = bypass_member
-        self.filters        = filters
-        self.msg_times      = deque()
-        self.is_running     = True
-
-    def stop(self):
-        self.is_running = False
-
-    def _should_show(self, user, msg, is_member, mps):
-        f = self.filters
-        if user.lower() in [u.lower() for u in f.get("user_blacklist", [])]: 
-            return False
-        if user.lower() in [u.lower() for u in f.get("user_whitelist", [])]: 
-            return True
-        msg_lower = msg.lower()
-        for word in f.get("always_block_words", []):
-            if word.lower() in msg_lower: 
-                return False
-        is_filtering = mps >= self.threshold
-        if is_filtering:
-            for word in f.get("volume_block_words", []):
-                if word.lower() in msg_lower: 
-                    return False
-        if is_member:
-            if self.bypass_member == "Always": 
-                return True
-            if self.bypass_member == "Never":  
-                return False
-        if is_filtering: 
-            return False
-        return True
-
-    def run(self):
-        self.status_msg.emit("Resolving channel...")
-        video_id = resolve_video_id(self.handle)
-        if not video_id:
-            self.status_msg.emit("Error: Could not find live stream")
-            if self.is_running: 
-                self.disconnected.emit()
-            return
-
-        self.status_msg.emit(f"Connecting... (ID: {video_id})")
-
-        def _tick():
-            while self.is_running:
-                time.sleep(1.0)
-                now = time.time()
-                while self.msg_times and now - self.msg_times[0] > self.CHAT_RATE_WINDOW:
-                    self.msg_times.popleft()
-                mps = len(self.msg_times) / self.CHAT_RATE_WINDOW
-                self.stats_update.emit(mps, mps >= self.threshold)
-        
-        threading.Thread(target=_tick, daemon=True).start()
-
-        try:
-            import pytchat
-            
-            chat = pytchat.create(video_id=video_id, interruptable=False)
-            if not chat.is_alive():
-                self.status_msg.emit("Error: Chat not active")
-                if self.is_running: 
-                    self.disconnected.emit()
-                return
-            
-            self.status_msg.emit("Connected")
-
-            while self.is_running and chat.is_alive():
-                for item in chat.get().sync_items():
-                    if not self.is_running: 
-                        break
-                    
-                    now = time.time()
-                    self.msg_times.append(now)
-                    while self.msg_times and now - self.msg_times[0] > self.CHAT_RATE_WINDOW:
-                        self.msg_times.popleft()
-                    mps = len(self.msg_times) / self.CHAT_RATE_WINDOW
-                    is_filtering = mps >= self.threshold
-                    self.stats_update.emit(mps, is_filtering)
-
-                    is_member = bool(item.author.badgeUrl)
-                    user = item.author.name
-                    msg = item.message
-
-                    if self._should_show(user, msg, is_member, mps):
-                        badge = _platform_badge_html("youtube")
-                        color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
-                        self.message.emit(
-                            f"{badge}<span style='color:{color}'><b>{user}</b></span>: {msg}")
-
-        except Exception as e:
-            print(f"YT Error: {e}")
-            pass
-        finally:
-            if self.is_running:
-                self.status_msg.emit("Disconnected")
-                self.disconnected.emit()
 
 # ===================== MAIN CONTROLLER =====================
 class ChatGateMain(QWidget):
@@ -771,6 +454,8 @@ class ChatGateMain(QWidget):
         self.overlay_active  = False
         self.irc             = None
         self.yt              = None
+        self.kick            = None
+        self.tiktok          = None
         self._current_accent = ACCENT[TAB_TWITCH]
 
         self._irc_reconnect_attempt = 0
@@ -785,14 +470,29 @@ class ChatGateMain(QWidget):
         self._yt_reconnect_timer.timeout.connect(self._do_yt_reconnect)
         self._last_yt_handle        = ""
 
+        self._kick_reconnect_attempt = 0
+        self._kick_reconnect_timer   = QTimer()
+        self._kick_reconnect_timer.setSingleShot(True)
+        self._kick_reconnect_timer.timeout.connect(self._do_kick_reconnect)
+        self._last_kick_channel      = ""
+
+        self._tiktok_reconnect_attempt = 0
+        self._tiktok_reconnect_timer   = QTimer()
+        self._tiktok_reconnect_timer.setSingleShot(True)
+        self._tiktok_reconnect_timer.timeout.connect(self._do_tiktok_reconnect)
+        self._last_tiktok_handle       = ""
+
         self._twitch_mps     = 0.0
         self._yt_mps         = 0.0
+        self._kick_mps       = 0.0
+        self._tiktok_mps     = 0.0
         self._latest_tag     = None
         self._latest_url     = None
         self._download_thread = None
 
         self.overlay.move(self.settings.get("pos_x", 100), self.settings.get("pos_y", 100))
         self.overlay.resize(self.settings.get("width", 400), self.settings.get("height", 600))
+        self.overlay.show_link_previews = self.settings.get("show_link_previews", True)
 
         self.init_ui()
         self.apply_theme()
@@ -819,6 +519,8 @@ class ChatGateMain(QWidget):
         data = {
             "twitch_channel":     self.twitch_input.text(),
             "yt_handle":          self.yt_input.text(),
+            "kick_channel":       self.kick_input.text(),
+            "tiktok_handle":      self.tiktok_input.text(),
             "mps":                self.mps_spin.value(),
             "opacity":            self.alpha_slider.value(),
             "pos_x":              self.overlay.x(),
@@ -836,11 +538,14 @@ class ChatGateMain(QWidget):
             "bypass_sub":         self.bp_sub.currentText(),
             "bypass_yt_member":    self.bp_yt_member.currentText(),
             "bypass_yt_subscriber": self.bp_yt_subscriber.currentText(),
+            "bypass_kick_verified": self.bp_kick_verified.currentText(),
+            "bypass_tiktok_follower": self.bp_tiktok_follower.currentText(),
 
             "always_block_words": self.always_block_list.get_items(),
             "volume_block_words": self.volume_block_list.get_items(),
             "user_whitelist":     self.user_whitelist.get_items(),
             "user_blacklist":     self.user_blacklist.get_items(),
+            "show_link_previews": self.show_link_previews_check.isChecked(),
             **self._get_event_flags(),
         }
         save_settings_to_file(data)
@@ -902,6 +607,11 @@ class ChatGateMain(QWidget):
         self.apply_theme()
         self.save_settings()
 
+    def _on_link_previews_changed(self):
+        enabled = self.show_link_previews_check.isChecked()
+        self.overlay.show_link_previews = enabled
+        self.save_settings()
+
     def _on_tab_changed(self, index):
         if not hasattr(self, 'theme_btn'): return
         accent = ACCENT.get(index, "#9146FF")
@@ -952,6 +662,18 @@ class ChatGateMain(QWidget):
             self.yt.is_running = False
             try:
                 self.yt.wait(timeout=2000)
+            except:
+                pass
+        if self.kick is not None and self.kick.is_running:
+            self.kick.is_running = False
+            try:
+                self.kick.wait(timeout=2000)
+            except:
+                pass
+        if self.tiktok is not None and self.tiktok.is_running:
+            self.tiktok.is_running = False
+            try:
+                self.tiktok.wait(timeout=2000)
             except:
                 pass
 
@@ -1007,6 +729,8 @@ class ChatGateMain(QWidget):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tabs.addTab(self._build_twitch_tab(),  "Twitch")
         self.tabs.addTab(self._build_youtube_tab(), "YouTube")
+        self.tabs.addTab(self._build_kick_tab(),    "Kick")
+        self.tabs.addTab(self._build_tiktok_tab(),  "TikTok")
         self.tabs.addTab(self._build_filters_tab(), "Filters")
         layout.addWidget(self.tabs)
 
@@ -1153,6 +877,14 @@ class ChatGateMain(QWidget):
 
         lay.addWidget(ev_group)
         lay.addStretch()
+        
+        # Disconnect button
+        self.twitch_disconnect_btn = QPushButton("DISCONNECT")
+        self.twitch_disconnect_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.twitch_disconnect_btn.clicked.connect(self._disconnect_twitch)
+        self.twitch_disconnect_btn.setEnabled(False)
+        lay.addWidget(self.twitch_disconnect_btn)
+        
         return tab
 
     def _build_youtube_tab(self):
@@ -1203,6 +935,120 @@ class ChatGateMain(QWidget):
             self.yt_connect_btn.setEnabled(False)
 
         lay.addStretch()
+        
+        # Disconnect button
+        self.yt_disconnect_btn = QPushButton("DISCONNECT")
+        self.yt_disconnect_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.yt_disconnect_btn.clicked.connect(self._disconnect_youtube)
+        self.yt_disconnect_btn.setEnabled(False)
+        lay.addWidget(self.yt_disconnect_btn)
+        
+        return tab
+
+    def _build_kick_tab(self):
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        row = QHBoxLayout()
+        self.kick_input = QLineEdit(self.settings.get("kick_channel", ""))
+        self.kick_input.setPlaceholderText("Channel name")
+        self.kick_input.textChanged.connect(self.save_settings)
+        self.kick_connect_btn = QPushButton("CONNECT")
+        self.kick_connect_btn.clicked.connect(self.start_kick)
+        row.addWidget(self.kick_input); row.addWidget(self.kick_connect_btn)
+        lay.addLayout(row)
+
+        self.kick_status = QLabel("OFFLINE")
+        self.kick_status.setStyleSheet("font-weight: bold;")
+        lay.addWidget(self.kick_status)
+        lay.addWidget(self._hline())
+
+        bh = QHBoxLayout()
+        bh.addWidget(QLabel("<b>ALLOW MESSAGES</b>"))
+        bh.addWidget(make_tooltip_btn(
+            "Always: verified messages always show.\n"
+            "Normal: verified go through the MPS filter.\nNever: verified messages are always hidden.",
+            accent="#00D084"))
+        bh.addStretch()
+        lay.addLayout(bh)
+
+        self.bp_kick_verified = self._bypass_combo("bypass_kick_verified")
+        r = QHBoxLayout(); lbl = QLabel("Verified:"); lbl.setFixedWidth(90)
+        r.addWidget(lbl); r.addWidget(self.bp_kick_verified); r.addStretch()
+        lay.addLayout(r)
+
+        if not KICK_AVAILABLE:
+            msg  = f"⚠ Kick unavailable: {KICK_ERROR}" if KICK_ERROR else "⚠ Kick support not available."
+            warn = QLabel(msg)
+            warn.setStyleSheet("color: #ff4444;")
+            warn.setWordWrap(True)
+            lay.addWidget(warn)
+            self.kick_connect_btn.setEnabled(False)
+
+        lay.addStretch()
+        
+        # Disconnect button
+        self.kick_disconnect_btn = QPushButton("DISCONNECT")
+        self.kick_disconnect_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.kick_disconnect_btn.clicked.connect(self._disconnect_kick)
+        self.kick_disconnect_btn.setEnabled(False)
+        lay.addWidget(self.kick_disconnect_btn)
+        
+        return tab
+
+    def _build_tiktok_tab(self):
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        row = QHBoxLayout()
+        self.tiktok_input = QLineEdit(self.settings.get("tiktok_handle", ""))
+        self.tiktok_input.setPlaceholderText("@handle")
+        self.tiktok_input.textChanged.connect(self.save_settings)
+        self.tiktok_connect_btn = QPushButton("CONNECT")
+        self.tiktok_connect_btn.clicked.connect(self.start_tiktok)
+        row.addWidget(self.tiktok_input); row.addWidget(self.tiktok_connect_btn)
+        lay.addLayout(row)
+
+        self.tiktok_status = QLabel("OFFLINE")
+        self.tiktok_status.setStyleSheet("font-weight: bold;")
+        lay.addWidget(self.tiktok_status)
+        lay.addWidget(self._hline())
+
+        bh = QHBoxLayout()
+        bh.addWidget(QLabel("<b>ALLOW MESSAGES</b>"))
+        bh.addWidget(make_tooltip_btn(
+            "Always: follower messages always show.\n"
+            "Normal: followers go through the MPS filter.\nNever: follower messages are always hidden.",
+            accent="#000000"))
+        bh.addStretch()
+        lay.addLayout(bh)
+
+        self.bp_tiktok_follower = self._bypass_combo("bypass_tiktok_follower")
+        r = QHBoxLayout(); lbl = QLabel("Followers:"); lbl.setFixedWidth(90)
+        r.addWidget(lbl); r.addWidget(self.bp_tiktok_follower); r.addStretch()
+        lay.addLayout(r)
+
+        if not TT_AVAILABLE:
+            msg  = f"⚠ TikTok unavailable: {TT_ERROR}" if TT_ERROR else "⚠ TikTok support not available."
+            warn = QLabel(msg)
+            warn.setStyleSheet("color: #ff4444;")
+            warn.setWordWrap(True)
+            lay.addWidget(warn)
+            self.tiktok_connect_btn.setEnabled(False)
+
+        lay.addStretch()
+        
+        # Disconnect button
+        self.tiktok_disconnect_btn = QPushButton("DISCONNECT")
+        self.tiktok_disconnect_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.tiktok_disconnect_btn.clicked.connect(self._disconnect_tiktok)
+        self.tiktok_disconnect_btn.setEnabled(False)
+        lay.addWidget(self.tiktok_disconnect_btn)
+        
         return tab
 
     def _build_filters_tab(self):
@@ -1237,6 +1083,12 @@ class ChatGateMain(QWidget):
             setattr(self, attr, bl)
             lay.addWidget(bl)
             lay.addWidget(self._hline())
+
+        # Link previews checkbox
+        self.show_link_previews_check = QCheckBox("Show Link Previews (fetches metadata from URLs)")
+        self.show_link_previews_check.setChecked(self.settings.get("show_link_previews", True))
+        self.show_link_previews_check.stateChanged.connect(self._on_link_previews_changed)
+        lay.addWidget(self.show_link_previews_check)
 
         lay.addStretch()
         return tab
@@ -1288,12 +1140,29 @@ class ChatGateMain(QWidget):
             except: pass
         self.irc = IRCThread(
             self._last_twitch_channel, self.mps_spin.value(),
-            self._get_twitch_bypass(), self._get_filters(), self._get_event_flags())
+            self._get_twitch_bypass(), self._get_filters(), self._get_event_flags(),
+            _platform_badge_html, fmt_raid, fmt_sub, fmt_subgift, fmt_subgift_bomb,
+            fmt_announcement, fmt_watch_streak, fmt_bits, fmt_first_chat)
         self.irc.message.connect(self.overlay.add_message)
         self.irc.stats_update.connect(lambda m, f: self._update_stats(m, f, "twitch"))
         self.irc.status_msg.connect(lambda s: self.twitch_status.setText(s.upper()))
+        self.irc.mod_delete.connect(lambda user: self.overlay.remove_message_by_user(user))
         self.irc.disconnected.connect(self._on_irc_disconnected)
         self.irc.start()
+        self.twitch_disconnect_btn.setEnabled(True)
+
+    def _disconnect_twitch(self):
+        if self.irc is not None:
+            self.irc.stop()
+            self.irc.is_running = False
+            try:
+                self.irc.wait(timeout=1000)
+            except:
+                pass
+        self.twitch_disconnect_btn.setEnabled(False)
+        self.twitch_status.setText("OFFLINE")
+        self._irc_reconnect_attempt = 0
+        self._irc_reconnect_timer.stop()
 
     def _on_irc_disconnected(self):
         delay = RECONNECT_DELAYS[min(self._irc_reconnect_attempt, len(RECONNECT_DELAYS) - 1)]
@@ -1322,12 +1191,27 @@ class ChatGateMain(QWidget):
             self._last_yt_handle, 
             self.mps_spin.value(),
             self.bp_yt_member.currentText(), 
-            self._get_filters())
+            self._get_filters(),
+            _platform_badge_html)
         self.yt.message.connect(self.overlay.add_message)
         self.yt.stats_update.connect(lambda m, f: self._update_stats(m, f, "youtube"))
         self.yt.status_msg.connect(lambda s: self.yt_status.setText(s.upper()))
         self.yt.disconnected.connect(self._on_yt_disconnected)
         self.yt.start()
+        self.yt_disconnect_btn.setEnabled(True)
+
+    def _disconnect_youtube(self):
+        if self.yt is not None:
+            self.yt.stop()
+            self.yt.is_running = False
+            try:
+                self.yt.wait(timeout=1000)
+            except:
+                pass
+        self.yt_disconnect_btn.setEnabled(False)
+        self.yt_status.setText("OFFLINE")
+        self._yt_reconnect_attempt = 0
+        self._yt_reconnect_timer.stop()
 
     def _on_yt_disconnected(self):
         delay = RECONNECT_DELAYS[min(self._yt_reconnect_attempt, len(RECONNECT_DELAYS) - 1)]
@@ -1337,6 +1221,102 @@ class ChatGateMain(QWidget):
 
     def _do_yt_reconnect(self):
         if self._last_yt_handle: self._launch_yt()
+
+    def start_kick(self):
+        if not KICK_AVAILABLE or KickThread is None: return
+        self.save_settings()
+        self._kick_reconnect_attempt = 0
+        self._last_kick_channel      = self.kick_input.text().strip()
+        self._kick_reconnect_timer.stop()
+        self._launch_kick()
+        self._show_overlay()
+
+    def _launch_kick(self):
+        if self.kick is not None:
+            self.kick.stop()
+            try: self.kick.disconnected.disconnect()
+            except: pass
+        self.kick = KickThread(
+            self._last_kick_channel,
+            self.mps_spin.value(),
+            self.bp_kick_verified.currentText(),
+            self._get_filters())
+        self.kick.message.connect(self.overlay.add_message)
+        self.kick.stats_update.connect(lambda m, f: self._update_stats(m, f, "kick"))
+        self.kick.status_msg.connect(lambda s: self.kick_status.setText(s.upper()))
+        self.kick.disconnected.connect(self._on_kick_disconnected)
+        self.kick.start()
+        self.kick_disconnect_btn.setEnabled(True)
+
+    def _disconnect_kick(self):
+        if self.kick is not None:
+            self.kick.stop()
+            self.kick.is_running = False
+            try:
+                self.kick.wait(timeout=1000)
+            except:
+                pass
+        self.kick_disconnect_btn.setEnabled(False)
+        self.kick_status.setText("OFFLINE")
+        self._kick_reconnect_attempt = 0
+        self._kick_reconnect_timer.stop()
+
+    def _on_kick_disconnected(self):
+        delay = RECONNECT_DELAYS[min(self._kick_reconnect_attempt, len(RECONNECT_DELAYS) - 1)]
+        self._kick_reconnect_attempt += 1
+        self.kick_status.setText(f"RECONNECTING IN {delay}s...")
+        self._kick_reconnect_timer.start(delay * 1000)
+
+    def _do_kick_reconnect(self):
+        if self._last_kick_channel: self._launch_kick()
+
+    def start_tiktok(self):
+        if not TT_AVAILABLE or TikTokThread is None: return
+        self.save_settings()
+        self._tiktok_reconnect_attempt = 0
+        self._last_tiktok_handle       = self.tiktok_input.text().strip()
+        self._tiktok_reconnect_timer.stop()
+        self._launch_tiktok()
+        self._show_overlay()
+
+    def _launch_tiktok(self):
+        if self.tiktok is not None:
+            self.tiktok.stop()
+            try: self.tiktok.disconnected.disconnect()
+            except: pass
+        self.tiktok = TikTokThread(
+            self._last_tiktok_handle,
+            self.mps_spin.value(),
+            self.bp_tiktok_follower.currentText(),
+            self._get_filters())
+        self.tiktok.message.connect(self.overlay.add_message)
+        self.tiktok.stats_update.connect(lambda m, f: self._update_stats(m, f, "tiktok"))
+        self.tiktok.status_msg.connect(lambda s: self.tiktok_status.setText(s.upper()))
+        self.tiktok.disconnected.connect(self._on_tiktok_disconnected)
+        self.tiktok.start()
+        self.tiktok_disconnect_btn.setEnabled(True)
+
+    def _disconnect_tiktok(self):
+        if self.tiktok is not None:
+            self.tiktok.stop()
+            self.tiktok.is_running = False
+            try:
+                self.tiktok.wait(timeout=1000)
+            except:
+                pass
+        self.tiktok_disconnect_btn.setEnabled(False)
+        self.tiktok_status.setText("OFFLINE")
+        self._tiktok_reconnect_attempt = 0
+        self._tiktok_reconnect_timer.stop()
+
+    def _on_tiktok_disconnected(self):
+        delay = RECONNECT_DELAYS[min(self._tiktok_reconnect_attempt, len(RECONNECT_DELAYS) - 1)]
+        self._tiktok_reconnect_attempt += 1
+        self.tiktok_status.setText(f"RECONNECTING IN {delay}s...")
+        self._tiktok_reconnect_timer.start(delay * 1000)
+
+    def _do_tiktok_reconnect(self):
+        if self._last_tiktok_handle: self._launch_tiktok()
 
     def _show_overlay(self):
         if not self.overlay_active:
@@ -1350,12 +1330,18 @@ class ChatGateMain(QWidget):
 
         if self.irc is not None: self.irc.threshold = threshold
         if self.yt  is not None: self.yt.threshold  = threshold
+        if self.kick is not None: self.kick.threshold = threshold
+        if self.tiktok is not None: self.tiktok.threshold = threshold
 
         if not combined:
             if platform == "twitch":
                 self._twitch_mps = mps
             elif platform == "youtube":
                 self._yt_mps = mps
+            elif platform == "kick":
+                self._kick_mps = mps
+            elif platform == "tiktok":
+                self._tiktok_mps = mps
 
         is_filtering = mps >= threshold
         gate_color   = "#ff4444" if is_filtering else "#44cc44"
