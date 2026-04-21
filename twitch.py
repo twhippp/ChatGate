@@ -11,8 +11,21 @@ import random
 import re
 import time
 import threading
+import os
+import json
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
+
+TWITCH_CHANNEL_EMOTE_URLS = {}
+
+def _format_twitch_emotes(text, channel_name=''):
+    for emote in TWITCH_CHANNEL_EMOTE_URLS.keys():
+        if emote in text:
+            text = text.replace(emote, f':{emote}:')
+    return text
+
+def _download_twitch_emotes():
+    pass
 
 
 class IRCThread(QThread):
@@ -127,7 +140,27 @@ class IRCThread(QThread):
             return self._fmt_watch_streak(user, tags.get("msg-param-streak-months", "?"))
         return None
 
+    def _download_channel_emotes(self, channel_name):
+        import urllib.request
+        print(f"[Twitch] Loading emotes for {channel_name}...")
+        try:
+            req = urllib.request.Request(
+                f"https://decapi.me/bttv/emotes/{channel_name}",
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                emotes = response.read().decode().strip().split()
+                TWITCH_CHANNEL_EMOTE_URLS.clear()
+                for emote in emotes:
+                    TWITCH_CHANNEL_EMOTE_URLS[emote] = True
+            print(f"[Twitch] Loaded {len(TWITCH_CHANNEL_EMOTE_URLS)} channel emotes")
+        except Exception as e:
+            print(f"[Twitch] Emote load error: {e}")
+
     def run(self):
+        channel_name = self.channel.lstrip('#')
+        if channel_name:
+            self._download_channel_emotes(channel_name)
         self.sock = socket.socket()
         sock = self.sock
 
@@ -232,6 +265,8 @@ class IRCThread(QThread):
 
                     if self._should_show(user, content, roles, mps):
                         color = tags.get("color") or f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
+                        channel_name = self.channel.lstrip('#')
+                        content = _format_twitch_emotes(content, channel_name)
                         self.message.emit(
                             f"{self._platform_badge_html('twitch')}{self._role_badges_html(roles)}"
                             f"<span style='color:{color}'><b>{user}</b></span>: {content}")

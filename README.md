@@ -10,8 +10,8 @@ ChatGate is a high-performance, multi-platform live chat monitor designed for st
 | :--- | :--- | :--- |
 | **Twitch** | ✅ Stable | Fully implemented and tested |
 | **YouTube** | ✅ Stable | Fully implemented and tested |
-| **Kick** | 🔧 In Development | Basic support available, full WebSocket implementation pending (Only available by building yourself) | 
-| **TikTok** | 🔧 In Development/not publically available | Basic support available, API reliability pending (Only available by building yourself) | 
+| **Kick** | ✅ Stable | Fully implemented and tested |
+| **TikTok** | 🔧 In Development/not publicly available | Basic support available, API reliability pending | 
 
 ## Key Features
 

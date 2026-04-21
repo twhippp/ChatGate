@@ -125,7 +125,7 @@ YOUTUBE_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
 </svg>"""
 
 KICK_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path fill="#00D084" d="M3 0C1.35 0 0 1.35 0 3v18c0 1.65 1.35 3 3 3h5v-8h4v8h2V0H3zm8 11h-2V8h2v3zm5-11v14h2V0h-2z"/>
+  <path fill="#00D084" d="M5 2h14v20H5V2zm2 2v16h10V4H7zm2 2h6v2H9V6zm0 4h6v2H9v-2zm0 4h4v2H9v-2z"/>
 </svg>"""
 
 TIKTOK_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -167,7 +167,8 @@ def _platform_badge_html(platform):
         pm.toImage().save(qbuf, "PNG")
         b64 = base64.b64encode(qbuf.data().data()).decode()
         return f"<img src='data:image/png;base64,{b64}' width='12' height='12' style='vertical-align:middle;'> "
-    except Exception:
+    except Exception as e:
+        print(f"[Badge error] {platform}: {e}")
         return fallback
 
 # ===================== EVENT FORMATTERS =====================
