@@ -8,13 +8,14 @@ Date: April 2026
 
 import time
 import threading
+import logging
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
 
 # TikTok imports - may need to be installed
 try:
     from TikTokLive import TikTokLiveClient
-    from TikTokLive.events import ConnectEvent, CommentEvent, LikeEvent, GiftEvent, ShareEvent, FollowEvent
+    from TikTokLive.events import ConnectEvent, DisconnectEvent, LiveEndEvent, CommentEvent, LikeEvent, GiftEvent, ShareEvent, FollowEvent
     TT_AVAILABLE = True
     TT_ERROR = None
 except ImportError as e:
@@ -74,7 +75,56 @@ class TikTokThread(QThread):
 
         try:
             client = TikTokLiveClient(unique_id=f"@{self.handle}")
+            print(f"[TikTok] Created client with unique_id: @{self.handle}")
+            client.logger.setLevel(logging.DEBUG)
+            self.status_msg.emit(f"Checking @{self.handle}...")
+
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            async def check_and_run():
+                print(f"[TikTok] Checking if @{self.handle} is live...")
+                print(f"[TikTok] Client unique_id: {client.unique_id}")
+                try:
+                    is_live = await client.is_live(unique_id=self.handle)
+                    print(f"[TikTok] is_live: {is_live}")
+                    if not is_live:
+                        is_live_alt = await client.is_live()
+                        print(f"[TikTok] is_live (no arg): {is_live_alt}")
+                        if not is_live_alt:
+                            print(f"[TikTok] User @{self.handle} is not currently live")
+                            self.status_msg.emit(f"@{self.handle} is offline")
+                            return False
+                    return True
+                except Exception as e:
+                    print(f"[TikTok] Error checking user: {type(e).__name__}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                print(f"[TikTok] User @{self.handle} not found or error")
+                self.status_msg.emit(f"User @{self.handle} not found")
+                return False
+
+            is_ready = loop.run_until_complete(check_and_run())
+            loop.close()
+
+            if not is_ready:
+                print(f"[TikTok] is_live check failed, trying to connect anyway...")
+
             self.status_msg.emit(f"Connecting to @{self.handle}...")
+            print(f"[TikTok] Starting client.run()...")
+
+            async def on_connect(event):
+                print(f"[TikTok] Connected to @{self.handle}")
+                self.status_msg.emit(f"Connected to @{self.handle}")
+
+            async def on_disconnect(event):
+                print(f"[TikTok] Disconnected from @{self.handle}: {event}")
+                self.status_msg.emit("Disconnected")
+
+            async def on_live_end(event):
+                print(f"[TikTok] Live ended for @{self.handle}")
+                self.status_msg.emit("Live ended")
 
             async def on_comment(event):
                 if not self.is_running:
@@ -137,15 +187,22 @@ class TikTokThread(QThread):
                         f"<span style='color:#000000;font-weight:bold'>[TT]</span> "
                         f"<span style='color:{color}'><b>{user}</b></span> shared the live")
 
+            client.add_listener(ConnectEvent, on_connect)
+            client.add_listener(DisconnectEvent, on_disconnect)
+            client.add_listener(LiveEndEvent, on_live_end)
             client.add_listener(CommentEvent, on_comment)
             client.add_listener(LikeEvent, on_like)
             client.add_listener(GiftEvent, on_gift)
             client.add_listener(FollowEvent, on_follow)
             client.add_listener(ShareEvent, on_share)
 
-            client.run()
+            print(f"[TikTok] Starting client.run(fetch_live_check=False)...")
+            client.run(fetch_live_check=False)
 
         except Exception as e:
+            print(f"[TikTok] Exception: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             self.status_msg.emit(f"Error: {e}")
         finally:
             if self.is_running:

@@ -9,6 +9,7 @@ import base64
 import ctypes
 import ctypes.wintypes as wintypes
 import winreg
+import traceback
 from collections import deque
 import urllib.request
 import threading
@@ -20,7 +21,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QPushButton, QLabel, QDoubleSpinBox,
     QSlider, QCheckBox, QSpinBox, QSystemTrayIcon, QMenu, QAction,
     QTabWidget, QComboBox, QScrollArea, QFrame, QSizePolicy, QGroupBox,
-    QProgressDialog, QMessageBox
+    QProgressBar, QProgressDialog, QMessageBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QMetaObject, Q_ARG, pyqtSlot
 from PyQt5.QtGui import QIcon, QPixmap, QCursor
@@ -35,7 +36,7 @@ except ImportError as e:
     YT_ERROR = str(e)
 
 try:
-    from twitch import IRCThread
+    from twitch import IRCThread, emote_progress
 except ImportError:
     IRCThread = None
 
@@ -464,6 +465,15 @@ class ChatGateMain(QWidget):
         self._irc_reconnect_timer.setSingleShot(True)
         self._irc_reconnect_timer.timeout.connect(self._do_irc_reconnect)
         self._last_twitch_channel   = ""
+        
+        try:
+            if emote_progress:
+                emote_progress.connect(self._on_emote_progress)
+                print("[ChatGate] Connected to emote_progress signal")
+            else:
+                print("[ChatGate] emote_progress is None")
+        except Exception as e:
+            print(f"[ChatGate] Error connecting emote_progress: {e}")
 
         self._yt_reconnect_attempt  = 0
         self._yt_reconnect_timer    = QTimer()
@@ -833,6 +843,28 @@ class ChatGateMain(QWidget):
         self.twitch_status = QLabel("OFFLINE")
         self.twitch_status.setStyleSheet("font-weight: bold;")
         lay.addWidget(self.twitch_status)
+        
+        self.twitch_emote_progress = QProgressBar()
+        self.twitch_emote_progress.setMaximum(100)
+        self.twitch_emote_progress.setValue(0)
+        self.twitch_emote_progress.setTextVisible(True)
+        self.twitch_emote_progress.setFixedHeight(25)
+        self.twitch_emote_progress.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #9146FF;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #333;
+                color: white;
+            }
+            QProgressBar::chunk {
+                background-color: #9146FF;
+                border-radius: 3px;
+            }
+        """)
+        self.twitch_emote_progress.hide()
+        lay.addWidget(self.twitch_emote_progress)
+        
         lay.addWidget(self._hline())
 
         bh = QHBoxLayout()
@@ -1096,8 +1128,6 @@ class ChatGateMain(QWidget):
 
     def sync_overlay(self):
         opacity = self.alpha_slider.value() / 100.0
-        # setWindowOpacity affects the entire window including text.
-        # update_style still receives it for any background styling in overlay.py.
         self.overlay.setWindowOpacity(opacity)
         self.overlay.update_style(self.font_spin.value(), opacity)
         self.overlay.resize(self.settings.get("width", 400), self.overlay.height())
@@ -1170,6 +1200,22 @@ class ChatGateMain(QWidget):
         self._irc_reconnect_attempt += 1
         self.twitch_status.setText(f"RECONNECTING IN {delay}s...")
         self._irc_reconnect_timer.start(delay * 1000)
+
+    def _on_emote_progress(self, current, total):
+        print(f"[ChatGate] Emote progress: {current}/{total}, visible={self.twitch_emote_progress.isVisible()}")
+        if total > 0:
+            self.twitch_emote_progress.setMaximum(total)
+            self.twitch_emote_progress.setValue(current)
+            if current == 1:
+                self.twitch_emote_progress.setVisible(True)
+                self.twitch_emote_progress.show()
+                self.twitch_status.setText("LOADING EMOTES...")
+                print("[ChatGate] Progress bar should now be visible")
+            elif current >= total:
+                self.twitch_status.setText("CONNECTED")
+                self.twitch_emote_progress.hide()
+            else:
+                self.twitch_status.setText(f"LOADING EMOTES ({current}/{total})...")
 
     def _do_irc_reconnect(self):
         if self._last_twitch_channel: self._launch_irc()
@@ -1531,4 +1577,14 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    run_app()
+    try:
+        run_app()
+    except Exception as e:
+        log_dir = os.path.join(os.environ.get('APPDATA', '.'), 'ChatGate')
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, 'crash.log'), 'w') as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(str(e) + "\n")
+            import traceback
+            traceback.print_exc(file=f)
+        raise

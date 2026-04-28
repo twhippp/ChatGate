@@ -15,9 +15,22 @@ python -m PyInstaller ^
     --name ChatGate ^
     --icon=ChatGate.ico ^
     --add-data "ChatGate.ico;." ^
-    --collect-all chat_downloader ^
-    --hidden-import chat_downloader ^
+    --add-data ".venv\Lib\site-packages\appdirs.py;appdirs" ^
+    --copy-metadata packaging ^
+    --collect-all tls_client ^
+    --collect-all PyQtWebEngine ^
+    --collect-all PyQt5 ^
+    --add-binary ".venv\Lib\site-packages\tls_client\dependencies\tls-client-64.dll;tls_client\dependencies" ^
     --hidden-import PyQt5.QtSvg ^
+    --hidden-import tls_client ^
+    --hidden-import requests ^
+    --hidden-import certifi ^
+    --hidden-import charset_normalizer ^
+    --hidden-import idna ^
+    --hidden-import urllib3 ^
+    --hidden-import PyQt5.QtWebEngineWidgets ^
+    --hidden-import sip ^
+    --hidden-import appdirs ^
     main.py
 
 if errorlevel 1 (
