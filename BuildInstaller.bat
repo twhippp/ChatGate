@@ -9,7 +9,18 @@ echo.
 echo [1/2] Building ChatGate.exe with PyInstaller...
 echo.
 
-python -m PyInstaller ^
+:: ---- Check for UPX ----
+echo Checking for UPX availability...
+set "NOUPX="
+where upx >nul 2>&1
+if errorlevel 1 (
+    echo UPX not found; PyInstaller will be run with --noupx.
+    set "NOUPX=--noupx"
+) else (
+    echo UPX found; PyInstaller will use UPX if available.
+)
+
+python -m PyInstaller %NOUPX% ^
     --onefile ^
     --windowed ^
     --name ChatGate ^
