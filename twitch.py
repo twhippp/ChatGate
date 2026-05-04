@@ -21,7 +21,7 @@ TWITCH_CHANNEL_EMOTES = {}
 TWITCH_GLOBAL_EMOTES = {}
 TWITCH_NATIVE_GLOBAL_EMOTES = {}
 EMOTE_CACHE_DIR = None
-emote_progress = pyqtSignal(int, int)  # (current, total)
+emote_progress = None  # Will be set to pyqtSignal(int, int) if available
 
 def _get_emote_cache_dir():
     global EMOTE_CACHE_DIR
@@ -218,11 +218,63 @@ def _download_global_emotes_from_twitchemotes():
     # First load Twitch native global emotes (Kappa, PogChamp, etc.)
     total = len(TWITCH_NATIVE_GLOBAL_EMOTES)
     for i, (emote_name, emote_id) in enumerate(TWITCH_NATIVE_GLOBAL_EMOTES.items()):
-        img_url = f"https://static-cdn.jtvnw.net/emoticons/v2/{emote_id}/static/3.0"
-        TWITCH_GLOBAL_EMOTES[emote_name] = (img_url, False)
+        # Probe a small set of CDN URL patterns and pick the first that returns 200
+        candidates = [
+            f"https://static-cdn.jtvnw.net/emoticons/v2/{emote_id}/static/3.0",
+            f"https://static-cdn.jtvnw.net/emoticons/v1/{emote_id}/1.0",
+        ]
+        chosen = None
+        for c in candidates:
+            try:
+                h = requests.head(c, timeout=5, allow_redirects=True, headers={'User-Agent': 'Mozilla/5.0'})
+                if h.status_code == 200:
+                    chosen = c
+                    break
+            except Exception:
+                pass
+        if not chosen:
+            # fallback to the first candidate even if probe failed
+            chosen = candidates[0]
+        TWITCH_GLOBAL_EMOTES[emote_name] = (chosen, False)
         if emote_progress:
             emote_progress.emit(i + 1, total)
-    
+
+    # Merge in emotes from twitchemotes.com Global Emotes section
+    print("[Twitch Global Emotes] Fetching Global Emotes from twitchemotes.com ...")
+    try:
+        resp = requests.get("https://twitchemotes.com/", timeout=15)
+        resp.raise_for_status()
+        html = resp.text
+        # Find the Global Emotes section
+        import re as regex
+        # The section is <h3>Global Emotes</h3> ... <div class="..."> ... with multiple <img> tags
+        section_match = regex.search(r'<h3[^>]*>\s*Global Emotes\s*</h3>([\s\S]+?)(<h3|<footer)', html, regex.IGNORECASE)
+        if section_match:
+            section = section_match.group(1)
+            # Find all <img ...> tags inside the section and extract attributes robustly
+            img_tags = regex.findall(r'<img[^>]+>', section)
+            found = 0
+            for tag in img_tags:
+                m_name = regex.search(r'data-regex="([^\"]+)"', tag)
+                m_src  = regex.search(r'src="([^\"]+)"', tag)
+                if not m_name or not m_src:
+                    # try the reversed attribute order or single-quoted attributes
+                    m_name = m_name or regex.search(r"data-regex='([^']+)'", tag)
+                    m_src  = m_src  or regex.search(r"src='([^']+)'", tag)
+                if m_name and m_src:
+                    emote_name = m_name.group(1)
+                    img_url = m_src.group(1)
+                    if img_url.startswith('//'):
+                        img_url = 'https:' + img_url
+                    is_animated = img_url.lower().endswith('.gif')
+                    TWITCH_GLOBAL_EMOTES[emote_name] = (img_url, is_animated)
+                    found += 1
+            print(f"[Twitch Global Emotes] Found {found} emotes from twitchemotes.com")
+        else:
+            print("[Twitch Global Emotes] Could not find Global Emotes section in twitchemotes.com HTML")
+    except Exception as e:
+        print(f"[Twitch Global Emotes] Error fetching twitchemotes.com: {e}")
+
     # Then add BTTV global emotes
     print("[Twitch Global Emotes] Fetching BTTV global emotes...")
     try:
@@ -236,25 +288,25 @@ def _download_global_emotes_from_twitchemotes():
     except Exception as e:
         print(f"[Twitch Global Emotes] Error fetching BTTV: {e}")
         emotes = []
-    
+
     total += len(emotes)
     for i, emote in enumerate(emotes):
         emote_id = emote.get("id")
         emote_name = emote.get("code")
         is_animated = emote.get("animated", False)
-        
+
         if not emote_id or not emote_name:
             continue
-        
+
         if is_animated:
             img_source = f"https://cdn.betterttv.net/emote/{emote_id}/3x.gif"
         else:
             img_source = f"https://cdn.betterttv.net/emote/{emote_id}/3x.png"
-        
+
         TWITCH_GLOBAL_EMOTES[emote_name] = (img_source, is_animated)
         if emote_progress:
             emote_progress.emit(len(TWITCH_NATIVE_GLOBAL_EMOTES) + i + 1, total)
-    
+
     if emote_progress:
         emote_progress.emit(total, total)
     print(f"[Twitch Global Emotes] Done! Loaded {len(TWITCH_GLOBAL_EMOTES)} total global emotes")

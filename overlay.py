@@ -3,7 +3,7 @@ import ctypes
 import re
 import requests
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QSizePolicy
-from PyQt5.QtCore import Qt, pyqtSlot, QPoint, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSlot, QPoint, QThread, pyqtSignal, QTimer
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 from PyQt5.QtGui import QColor
 
@@ -159,10 +159,22 @@ class ChatOverlay(QWidget):
                     self.link_preview_threads[url] = thread
         
         self._append_html(wrapped_html)
-        self.chat_display.page().runJavaScript("window.scrollTo(0, document.body.scrollHeight);")
+        self._schedule_scroll()
+
+    def _schedule_scroll(self):
+        QTimer.singleShot(50, self._scroll_to_bottom)
+        QTimer.singleShot(100, self._scroll_to_bottom)
+        QTimer.singleShot(200, self._scroll_to_bottom)
 
     def _scroll_to_bottom(self):
-        self.chat_display.page().runJavaScript("window.scrollTo(0, document.body.scrollHeight);")
+        # Clear old messages to prevent memory buildup
+        if self.next_msg_id > 500:
+            self._html_content = ""
+            self.message_map.clear()
+            self.next_msg_id = 0
+            self._set_html("")
+        else:
+            self.chat_display.page().runJavaScript("window.scrollTo(0, document.body.scrollHeight);")
 
     def _insert_link_preview(self, url, title, description):
         if not title or not description:
@@ -174,7 +186,7 @@ class ChatOverlay(QWidget):
             f'</div>'
         )
         self._append_html(preview_html)
-        self._scroll_to_bottom()
+        self._schedule_scroll()
 
     def remove_message(self, msg_id):
         if msg_id not in self.message_map:

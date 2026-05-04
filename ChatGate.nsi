@@ -74,29 +74,17 @@ Section "Install" SecMain
     ; Files
     File "dist\${APP_EXE}"
     File "ChatGate.ico"
-
+    
     ; AppData folder
     CreateDirectory "$APPDATA\${APP_NAME}"
-
+    
     ; Start Menu
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" \
                    "$INSTDIR\${APP_EXE}" "" "$INSTDIR\ChatGate.ico"
-
+    
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" \
                    "$INSTDIR\Uninstall.exe"
-
-    ; Desktop shortcut (optional)
-    ${If} $DesktopShortcut == 1
-        CreateShortcut "$DESKTOP\${APP_NAME}.lnk" \
-                       "$INSTDIR\${APP_EXE}" "" "$INSTDIR\ChatGate.ico"
-    ${EndIf}
-
-    ; OBS Plugin Script - combined script that finds OBS and installs/enables
-    File "find-obs.ps1"
-
-    ; Find OBS scripts folder, copy lua, and enable
-    nsExec::ExecToLog 'PowerShell -ExecutionPolicy Bypass -File "$INSTDIR\find-obs.ps1"'
 
     ; Uninstaller
     WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -119,7 +107,6 @@ Section "Uninstall"
 
     Delete "$INSTDIR\${APP_EXE}"
     Delete "$INSTDIR\ChatGate.ico"
-    Delete "$INSTDIR\find-obs.ps1"
     Delete "$INSTDIR\Uninstall.exe"
     RMDir  "$INSTDIR"
 

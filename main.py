@@ -239,6 +239,7 @@ SETTINGS_DEFAULTS = {
     "font_size":          22,
     "minimize_to_tray":   True,
     "combined_mps":       True,
+    "metrics":            True,
     "bypass_broadcaster": "Normal",
     "bypass_mod":         "Normal",
     "bypass_vip":         "Normal",
@@ -447,7 +448,6 @@ class ChatGateMain(QWidget):
         super().__init__()
         self.settings    = load_settings()
         self._loading_settings = True
-        self._obs_toggling = False
         self.dark_mode   = self.settings.get("dark_mode", True)
         self.setWindowTitle("ChatGate")
         self.resize(500, 800)
@@ -467,11 +467,14 @@ class ChatGateMain(QWidget):
         self._last_twitch_channel   = ""
         
         try:
-            if emote_progress:
-                emote_progress.connect(self._on_emote_progress)
-                print("[ChatGate] Connected to emote_progress signal")
-            else:
-                print("[ChatGate] emote_progress is None")
+            from PyQt5.QtCore import pyqtSignal, QObject
+            class _EmoteSignal(QObject):
+                sig = pyqtSignal(int, int)
+            _es = _EmoteSignal()
+            global emote_progress
+            emote_progress = _es.sig
+            emote_progress.connect(self._on_emote_progress)
+            print("[ChatGate] Connected to emote_progress signal")
         except Exception as e:
             print(f"[ChatGate] Error connecting emote_progress: {e}")
 
@@ -525,8 +528,6 @@ class ChatGateMain(QWidget):
         }
 
     def save_settings(self):
-        if getattr(self, '_obs_toggling', False):
-            return
         data = {
             "twitch_channel":     self.twitch_input.text(),
             "yt_handle":          self.yt_input.text(),
@@ -542,7 +543,8 @@ class ChatGateMain(QWidget):
             "font_size":          self.font_spin.value(),
             "minimize_to_tray":   self.minimize_to_tray_check.isChecked(),
             "combined_mps":       self.combined_mps_check.isChecked(),
-            "launch_with_obs":   self.launch_with_obs_check.isChecked(),
+            "metrics":           self.metric.isChecked(),
+        "launch_with_obs":   False,
             "bypass_broadcaster": self.bp_broadcaster.currentText(),
             "bypass_mod":         self.bp_mod.currentText(),
             "bypass_vip":         self.bp_vip.currentText(),
@@ -561,33 +563,13 @@ class ChatGateMain(QWidget):
         }
         save_settings_to_file(data)
 
-    def _toggle_launch_with_obs(self, state):
-        if getattr(self, '_loading_settings', False) or self._obs_toggling:
-            return
-
-        self._obs_toggling = True
-        target_state = (state == 2)
-
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        ps1_path = os.path.join(script_dir, "find-obs.ps1")
-
-        if not os.path.exists(ps1_path):
-            self._obs_toggling = False
-            return
-
-        try:
-            if target_state:
-                subprocess.run(
-                    ["powershell", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path],
-                    check=True, capture_output=True)
-            else:
-                subprocess.run(
-                    ["powershell", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path, "-Disable"],
-                    check=True, capture_output=True)
-        except Exception as e:
-            print(f"Error: {e}")
-        finally:
-            self._obs_toggling = False
+    def _get_twitch_bypass(self):
+        return {
+            "broadcaster": self.bp_broadcaster.currentText(),
+            "mod":         self.bp_mod.currentText(),
+            "vip":         self.bp_vip.currentText(),
+            "sub":         self.bp_sub.currentText(),
+        }
 
     def _get_filters(self):
         return {
@@ -595,14 +577,6 @@ class ChatGateMain(QWidget):
             "volume_block_words": self.volume_block_list.get_items(),
             "user_whitelist":     self.user_whitelist.get_items(),
             "user_blacklist":     self.user_blacklist.get_items(),
-        }
-
-    def _get_twitch_bypass(self):
-        return {
-            "broadcaster": self.bp_broadcaster.currentText(),
-            "mod":         self.bp_mod.currentText(),
-            "vip":         self.bp_vip.currentText(),
-            "sub":         self.bp_sub.currentText(),
         }
 
     def apply_theme(self, accent=None):
@@ -802,15 +776,14 @@ class ChatGateMain(QWidget):
 
         self.launch_with_obs_check = QCheckBox("Launch with OBS")
         checked = self.settings.get("launch_with_obs", False)
-        self.launch_with_obs_check.setChecked(checked)
-        self.launch_with_obs_check.stateChanged.connect(self._toggle_launch_with_obs)
-        self.launch_with_obs_check.stateChanged.connect(self.save_settings)
+        self.launch_with_obs_check.setChecked(False)
+        self.launch_with_obs_check.hide()
         self._loading_settings = False
 
         self.theme_btn = QPushButton("")
         self.theme_btn.clicked.connect(self.toggle_theme)
         bottom_row.addWidget(self.minimize_to_tray_check); bottom_row.addStretch()
-        bottom_row.addWidget(self.launch_with_obs_check); bottom_row.addStretch()
+        bottom_row.addStretch()
         bottom_row.addWidget(self.theme_btn)
         layout.addLayout(bottom_row)
 
@@ -1122,6 +1095,12 @@ class ChatGateMain(QWidget):
         self.show_link_previews_check.setChecked(self.settings.get("show_link_previews", True))
         self.show_link_previews_check.stateChanged.connect(self._on_link_previews_changed)
         lay.addWidget(self.show_link_previews_check)
+
+        # Metrics checkbox
+        self.metric = QCheckBox("Enable Metrics")
+        self.metric.setChecked(self.settings.get("metrics", True))
+        self.metric.stateChanged.connect(self.save_settings)
+        lay.addWidget(self.metric)
 
         lay.addStretch()
         return tab
