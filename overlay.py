@@ -2,6 +2,31 @@ import sys
 import ctypes
 import re
 import requests
+import importlib.util
+import os
+
+# Load project's badges.py explicitly to avoid colliding with the top-level
+# `badges/` assets directory which would make `import badges` pick the
+# directory instead of the helper module.
+proj_root = os.path.dirname(os.path.abspath(__file__))
+badges_py = os.path.join(proj_root, 'badges.py')
+if os.path.exists(badges_py):
+    try:
+        spec = importlib.util.spec_from_file_location('project_badges', badges_py)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        get_badge_html = getattr(mod, 'get_badge_html')
+    except Exception:
+        get_badge_html = None
+else:
+    get_badge_html = None
+
+if get_badge_html is None:
+    def get_badge_html(token, size=14):
+        if token == 'm': return "<span style='color:#9146FF;'>🛡️</span> "
+        if token == 'v': return "<span style='color:#ffcc00;'>💎</span> "
+        if token == 's': return "<span style='color:#FFD700;'>★</span> "
+        return ''
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QSizePolicy
 from PyQt5.QtCore import Qt, pyqtSlot, QPoint, QThread, pyqtSignal, QTimer
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
@@ -33,13 +58,15 @@ class ChatOverlay(QWidget):
 
         self.drag_handle = QLabel("DRAG TO MOVE")
         self.drag_handle.setAlignment(Qt.AlignCenter)
-        self.drag_handle.setFixedHeight(20)
-        self.drag_handle.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        # Slightly larger handle for visibility and easier grabbing
+        self.drag_handle.setFixedHeight(28)
+        self.drag_handle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.drag_handle.setStyleSheet("""
-            background-color: rgba(145, 70, 255, 180); 
-            color: white; 
-            font-weight: bold; 
-            font-size: 10px;
+            background-color: rgba(145, 70, 255, 200);
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            padding: 4px 8px;
         """)
         self.drag_handle.hide()
         
@@ -142,6 +169,43 @@ class ChatOverlay(QWidget):
 
     @pyqtSlot(str)
     def add_message(self, html):
+        # Replace simple badge tokens like [m], [v], [s] with images
+        def _badge_repl(m):
+            tok = m.group(1).lower()
+            return get_badge_html(tok, size=max(12, getattr(self, '_font_size', 14) - 2))
+        html = re.sub(r"\[([mvsMVS])\]", _badge_repl, html)
+        # Detect channel-points / user-notice redeems and render a banner
+        try:
+            lower = html.lower()
+            if 'redeemed' in lower and 'channel' in lower:
+                # extract inline svg if present
+                svg_match = re.search(r'(<svg[\s\S]*?</svg>)', html, re.IGNORECASE)
+                svg = svg_match.group(1) if svg_match else ''
+                # extract "User redeemed Reward" pattern
+                ur_match = re.search(r'>(?P<user>[^<>]+?)\s+redeemed\s+(?P<reward>[^<]+)', html, re.IGNORECASE | re.DOTALL)
+                if ur_match:
+                    user = ur_match.group('user').strip()
+                    reward = ur_match.group('reward').strip()
+                    # find a trailing numeric points value if present
+                    pts = ''
+                    pts_matches = re.findall(r'>(\d+)<', html)
+                    if pts_matches:
+                        pts = pts_matches[-1]
+                    size = max(14, getattr(self, '_font_size', 14) + 2)
+                    banner = (
+                        f"<div style=\"padding:10px; margin:6px 0; background:linear-gradient(90deg,#fff6d6,#ffe680);"
+                        f" data-redeem='1'>"
+                        f"<div style=\"display:flex; align-items:center; gap:10px;\">"
+                        f"<div style=\"width:36px;height:36px;flex:0 0 36px;\">{svg}</div>"
+                        f"<div style=\"flex:1; color:#1b1b1b; font-size:{size}px; font-weight:700;\">"
+                        f"{user} <span style=\"font-weight:600;\">redeemed</span> <span style=\"color:#b35a00;\">{reward}</span>"
+                        f"</div>"
+                        f"<div style=\"flex:0 0 auto; font-weight:800; color:#b35a00; font-size:{size}px;\">{pts}</div>"
+                        f"</div></div>"
+                    )
+                    html = banner
+        except Exception:
+            pass
         msg_id = self.next_msg_id
         self.next_msg_id += 1
         
@@ -160,6 +224,32 @@ class ChatOverlay(QWidget):
         
         self._append_html(wrapped_html)
         self._schedule_scroll()
+
+    @pyqtSlot(str, str, str)
+    def add_redeem(self, user, reward, cost):
+        # Render a prominent redeem banner
+        try:
+            size = max(14, getattr(self, '_font_size', 14) + 2)
+            svg = ("<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\">"
+                   "<path d=\"M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z\"></path>"
+                   "<path fill-rule=\"evenodd\" d=\"M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z\" clip-rule=\"evenodd\"></path>"
+                   "</svg>")
+            pts = cost or ""
+            banner = (
+                f"<div style=\"padding:10px; margin:6px 0; background:linear-gradient(90deg,#fff6d6,#ffe680);" \
+                f"border-radius:6px; border:1px solid #f0c070;\">"
+                f"<div style=\"display:flex; align-items:center; gap:10px;\">"
+                f"<div style=\"width:36px;height:36px;flex:0 0 36px;\">{svg}</div>"
+                f"<div style=\"flex:1; color:#1b1b1b; font-size:{size}px; font-weight:700;\">"
+                f"{user} <span style=\"font-weight:600;\">redeemed</span> <span style=\"color:#b35a00;\">{reward}</span>"
+                f"</div>"
+                f"<div style=\"flex:0 0 auto; font-weight:800; color:#b35a00; font-size:{size}px;\">{pts}</div>"
+                f"</div></div>"
+            )
+            self._append_html(banner)
+            self._schedule_scroll()
+        except Exception:
+            pass
 
     def _schedule_scroll(self):
         QTimer.singleShot(50, self._scroll_to_bottom)

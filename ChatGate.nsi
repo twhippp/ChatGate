@@ -28,7 +28,7 @@ InstallDirRegKey  HKCU "${UNINSTALL_KEY}" "InstallLocation"
 !define MUI_UNICON        "ChatGate.ico"
 
 !define MUI_WELCOMEPAGE_TITLE "Welcome to ${APP_NAME} Setup"
-!define MUI_WELCOMEPAGE_TEXT  "This will install ${APP_NAME} ${APP_VERSION}.$\r$\n$\r$\nChatGate is a transparent live-chat overlay for streamers.$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TEXT  "This will install ${APP_NAME} ${APP_VERSION}.$\r$\n$\r$\nChatGate is a transparent live-chat overlay for streamers.$\r$\n$\r$\nChatGate is a program fully programmed by AI under the supervision of TWhippp. ChatGate has been Rigorously tested in real world streaming to ensure quality.$\r$\n$\r$\nClick Next to continue."
 
 !define MUI_FINISHPAGE_RUN       "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT  "Launch ${APP_NAME} now"

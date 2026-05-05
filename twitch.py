@@ -312,18 +312,38 @@ def _download_global_emotes_from_twitchemotes():
     print(f"[Twitch Global Emotes] Done! Loaded {len(TWITCH_GLOBAL_EMOTES)} total global emotes")
   
 def _format_twitch_emotes(text):
+    """
+    Replace emote tokens with <img> only when the emote appears as a standalone token
+    (surrounded by whitespace or string boundaries). This prevents accidental
+    replacement of substrings that may appear as part of usernames or other text.
+    """
     orig_text = text
-    # Debug: log what we're searching for
-    if any(e in text for e in ["Kappa", "PogChamp", "LUL"]):
-        print(f"[Emote] Checking text: {text} | Global emote keys sample: {list(TWITCH_GLOBAL_EMOTES.keys())[:5]}")
+    # Build a list of emote entries (name -> (src, animated)) sorted by length
+    # so longer emote names are matched first to avoid partial matches.
+    entries = []
     for emote_name, (img_source, is_animated) in TWITCH_GLOBAL_EMOTES.items():
-        if emote_name in text:
-            text = text.replace(emote_name, f'<img src="{img_source}" height="28" alt="{emote_name}"/>')
+        entries.append((emote_name, img_source))
     for emote_name, (img_source, is_animated) in TWITCH_CHANNEL_EMOTES.items():
-        if emote_name in text:
-            text = text.replace(emote_name, f'<img src="{img_source}" height="28" alt="{emote_name}"/>')
+        entries.append((emote_name, img_source))
+
+    entries.sort(key=lambda e: len(e[0]), reverse=True)
+
+    for emote_name, img_source in entries:
+        # match only when emote is surrounded by whitespace or start/end
+        try:
+            pattern = r'(?<!\S)' + re.escape(emote_name) + r'(?!\S)'
+            repl = f'<img src="{img_source}" height="28" alt="{emote_name}"/>'
+            new_text, n = re.subn(pattern, repl, text)
+            if n:
+                print(f"[Emote] Matched emote '{emote_name}' {n} time(s)")
+                text = new_text
+        except re.error:
+            # fallback to literal replace if regex fails for some emote name
+            if emote_name in text:
+                text = text.replace(emote_name, f'<img src="{img_source}" height="28" alt="{emote_name}"/>')
+
     if text != orig_text:
-        print(f"[Emote] Replaced: {text[:80]}...")
+        print(f"[Emote] Replaced content (truncated): {text[:120]}")
     return text
  
  
@@ -333,6 +353,7 @@ class IRCThread(QThread):
     status_msg   = pyqtSignal(str)
     disconnected = pyqtSignal()
     mod_delete   = pyqtSignal(str)
+    redeem       = pyqtSignal(str, str, str)
  
     def __init__(self, channel, threshold, bypass, filters, event_flags, platform_badge_html, fmt_raid, fmt_sub, fmt_subgift, fmt_subgift_bomb, fmt_announcement, fmt_watch_streak, fmt_bits, fmt_first_chat):
         super().__init__()
@@ -435,6 +456,21 @@ class IRCThread(QThread):
             return self._fmt_announcement(user, sys_msg, color) if sys_msg else None
         if msg_id == "watch-streak" and self.event_flags.get("show_watch_streaks"):
             return self._fmt_watch_streak(user, tags.get("msg-param-streak-months", "?"))
+        # Channel Points / Reward redeemed
+        # Support multiple reward msg-id variants (e.g., custom-reward-redeemed)
+        if msg_id and "reward" in msg_id:
+            try:
+                reward = tags.get("msg-param-reward-title", "Reward")
+                cost = tags.get("msg-param-cost", "")
+                # Emit structured redeem event for the UI to render
+                try:
+                    print(f"[Twitch] Redeem received: user={user!r}, reward={reward!r}, cost={cost!r}")
+                    self.redeem.emit(user, reward, cost)
+                except Exception:
+                    pass
+                return None
+            except Exception:
+                return None
         return None
  
     def _download_channel_emotes(self, channel_name):
@@ -499,6 +535,7 @@ class IRCThread(QThread):
                         tags = dict(t.split("=", 1) for t in tag_str.split(";") if "=" in t)
  
                     if "USERNOTICE" in rest:
+                        print(f"[Twitch USERNOTICE] msg-id={tags.get('msg-id')} tags={tags}")
                         html = self._handle_usernotice(tags)
                         if html: self.message.emit(html)
                         continue
@@ -531,13 +568,55 @@ class IRCThread(QThread):
                     except Exception:
                         content = ""
  
+                    # Some channels/bots announce redeems as regular chat messages.
+                    try:
+                        if 'redeemed' in content.lower():
+                            # Attempt to parse patterns like "User redeemed Reward" or "User redeemed Reward (cost)"
+                            m = re.search(r"(?P<user>[^\s:]+)\s+redeemed\s+(?P<reward>[^\(\n]+)", content, re.IGNORECASE)
+                            reward = None
+                            if m:
+                                reward = m.group('reward').strip()
+                            else:
+                                # fallback: take substring after 'redeemed'
+                                parts = content.split('redeemed', 1)
+                                if len(parts) > 1:
+                                    reward = parts[1].strip()
+                            if reward:
+                                print(f"[Twitch PRIVMSG Redeem] user={user!r} reward={reward!r} raw={content!r}")
+                                try:
+                                    self.redeem.emit(user, reward, '')
+                                except Exception:
+                                    pass
+                                # do not further process as normal chat
+                                continue
+                    except Exception:
+                        pass
+
+                    # Handle /me (ACTION) messages which come wrapped in ASCII 0x01
+                    is_action = False
+                    try:
+                        # Typical format: \x01ACTION text\x01
+                        am = re.match(r"^\x01ACTION\s*(.*)\x01$", content, re.DOTALL)
+                        if am:
+                            content = am.group(1).strip()
+                            is_action = True
+                        else:
+                            # Also tolerate raw 'ACTION ' prefix without trailing marker
+                            if content.startswith('\x01ACTION '):
+                                content = content.lstrip('\x01').lstrip('ACTION ').strip()
+                                is_action = True
+                            # Remove any stray control-A chars
+                            content = content.replace('\x01', '')
+                    except Exception:
+                        content = content.replace('\x01', '')
+
                     now = time.time()
                     self.msg_times.append(now)
                     while self.msg_times and now - self.msg_times[0] > 5.0:
                         self.msg_times.popleft()
                     mps = len(self.msg_times) / 5.0
                     self.stats_update.emit(mps, mps >= self.threshold)
- 
+
                     bits = tags.get("bits", "")
                     if bits and self.event_flags.get("show_bits"):
                         self.message.emit(self._fmt_bits(user, bits, content.strip()))
@@ -557,7 +636,12 @@ class IRCThread(QThread):
                     if self._should_show(user, content, roles, mps):
                         color = tags.get("color") or f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
                         channel_name = self.channel.lstrip('#')
+                        # Debug: log user and raw content before formatting/emote replacement
+                        print(f"[Twitch] Emitting message from user='{user}' raw_content={repr(content)}")
+                        # Format emotes, then apply /me italics if needed
                         content = _format_twitch_emotes(content)
+                        if is_action:
+                            content = f"<i>{content}</i>"
                         self.message.emit(
                             f"{self._platform_badge_html('twitch')}{self._role_badges_html(roles)}"
                             f"<span style='color:{color}'><b>{user}</b></span>: {content}")

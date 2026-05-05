@@ -503,6 +503,12 @@ class ChatGateMain(QWidget):
         self._latest_tag     = None
         self._latest_url     = None
         self._download_thread = None
+        # Buffer for incoming stats; UI updates are throttled to once/sec
+        self._pending_mps = {"twitch": 0.0, "youtube": 0.0, "kick": 0.0, "tiktok": 0.0}
+        self._pending_filtering = {"twitch": False, "youtube": False, "kick": False, "tiktok": False}
+        self._mps_ui_timer = QTimer()
+        self._mps_ui_timer.timeout.connect(self._flush_mps_ui)
+        self._mps_ui_timer.start(1000)
 
         self.overlay.move(self.settings.get("pos_x", 100), self.settings.get("pos_y", 100))
         self.overlay.resize(self.settings.get("width", 400), self.settings.get("height", 600))
@@ -1154,6 +1160,10 @@ class ChatGateMain(QWidget):
             _platform_badge_html, fmt_raid, fmt_sub, fmt_subgift, fmt_subgift_bomb,
             fmt_announcement, fmt_watch_streak, fmt_bits, fmt_first_chat)
         self.irc.message.connect(self.overlay.add_message)
+        try:
+            self.irc.redeem.connect(self.overlay.add_redeem)
+        except Exception:
+            pass
         self.irc.stats_update.connect(lambda m, f: self._update_stats(m, f, "twitch"))
         self.irc.status_msg.connect(lambda s: self.twitch_status.setText(s.upper()))
         self.irc.mod_delete.connect(lambda user: self.overlay.remove_message_by_user(user))
@@ -1188,13 +1198,18 @@ class ChatGateMain(QWidget):
             if current == 1:
                 self.twitch_emote_progress.setVisible(True)
                 self.twitch_emote_progress.show()
-                self.twitch_status.setText("LOADING EMOTES...")
+                # Only show loading if IRC thread is still running
+                if self.irc is not None and getattr(self.irc, 'is_running', False):
+                    self.twitch_status.setText("LOADING EMOTES...")
                 print("[ChatGate] Progress bar should now be visible")
             elif current >= total:
-                self.twitch_status.setText("CONNECTED")
+                # Only mark connected if the IRC thread is still active
+                if self.irc is not None and getattr(self.irc, 'is_running', False):
+                    self.twitch_status.setText("CONNECTED")
                 self.twitch_emote_progress.hide()
             else:
-                self.twitch_status.setText(f"LOADING EMOTES ({current}/{total})...")
+                if self.irc is not None and getattr(self.irc, 'is_running', False):
+                    self.twitch_status.setText(f"LOADING EMOTES ({current}/{total})...")
 
     def _do_irc_reconnect(self):
         if self._last_twitch_channel: self._launch_irc()
@@ -1351,52 +1366,87 @@ class ChatGateMain(QWidget):
             self.overlay.set_click_through(True)
 
     def _update_stats(self, mps, filtering, platform):
+        # Throttle UI updates: store latest values and update UI once/sec
         combined  = self.combined_mps_check.isChecked()
         threshold = self.mps_spin.value()
 
+        # Update thread thresholds so filters keep using current setting
         if self.irc is not None: self.irc.threshold = threshold
         if self.yt  is not None: self.yt.threshold  = threshold
         if self.kick is not None: self.kick.threshold = threshold
         if self.tiktok is not None: self.tiktok.threshold = threshold
 
-        if not combined:
-            if platform == "twitch":
-                self._twitch_mps = mps
-            elif platform == "youtube":
-                self._yt_mps = mps
-            elif platform == "kick":
-                self._kick_mps = mps
-            elif platform == "tiktok":
-                self._tiktok_mps = mps
+        # Store latest measurements; UI will be updated by _flush_mps_ui
+        if platform == "twitch":
+            self._twitch_mps = mps
+        elif platform == "youtube":
+            self._yt_mps = mps
+        elif platform == "kick":
+            self._kick_mps = mps
+        elif platform == "tiktok":
+            self._tiktok_mps = mps
 
-        is_filtering = mps >= threshold
-        gate_color   = "#ff4444" if is_filtering else "#44cc44"
-        gate_text    = "🔴 GATE CLOSED" if is_filtering else "🟢 GATE OPEN"
-        status_text  = f"CONNECTED  |  {gate_text}  |  MPS: {mps:.1f}"
+        self._pending_mps[platform] = mps
+        self._pending_filtering[platform] = bool(filtering)
 
-        if combined:
-            self.mps_label.setText(f"MPS: {mps:.1f}")
-            self.mps_label.setStyleSheet(f"color: {gate_color}; font-weight: bold;")
-            if platform == "twitch":
-                self.twitch_status.setText(status_text)
-                self.twitch_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
-            elif platform == "youtube":
-                self.yt_status.setText(status_text)
-                self.yt_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
-        else:
-            if platform == "twitch":
-                self.twitch_status.setText(status_text)
-                self.twitch_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
-            elif platform == "youtube":
-                self.yt_status.setText(status_text)
-                self.yt_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
-            twitch_active = self.irc is not None and self.irc.is_running
-            yt_active     = self.yt  is not None and self.yt.is_running
-            display_mps   = max(
-                self._twitch_mps if twitch_active else 0.0,
-                self._yt_mps     if yt_active     else 0.0)
-            self.mps_label.setText(f"MPS: {display_mps:.1f}")
-            self.mps_label.setStyleSheet("color: #888; font-weight: bold;")
+    def _flush_mps_ui(self):
+        """Called once per second to update MPS and per-platform status labels."""
+        try:
+            combined = self.combined_mps_check.isChecked()
+            threshold = self.mps_spin.value()
+
+            if combined:
+                mps_val = max(self._pending_mps.values()) if self._pending_mps else 0.0
+                is_filtering = mps_val >= threshold
+                gate_color = "#ff4444" if is_filtering else "#44cc44"
+                gate_text = "🔴 GATE CLOSED" if is_filtering else "🟢 GATE OPEN"
+                status_text = f"CONNECTED  |  {gate_text}  |  MPS: {mps_val:.1f}"
+
+                self.mps_label.setText(f"MPS: {mps_val:.1f}")
+                self.mps_label.setStyleSheet(f"color: {gate_color}; font-weight: bold;")
+
+                if self.irc is not None and getattr(self.irc, 'is_running', False):
+                    self.twitch_status.setText(status_text)
+                    self.twitch_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
+                if self.yt is not None and getattr(self.yt, 'is_running', False):
+                    self.yt_status.setText(status_text)
+                    self.yt_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
+            else:
+                # Update per-platform status labels if active
+                # Twitch
+                if self.irc is not None and getattr(self.irc, 'is_running', False):
+                    m = self._pending_mps.get('twitch', 0.0)
+                    is_filtering = m >= threshold
+                    gate_color = "#ff4444" if is_filtering else "#44cc44"
+                    gate_text = "🔴 GATE CLOSED" if is_filtering else "🟢 GATE OPEN"
+                    status_text = f"CONNECTED  |  {gate_text}  |  MPS: {m:.1f}"
+                    self.twitch_status.setText(status_text)
+                    self.twitch_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
+                # YouTube
+                if self.yt is not None and getattr(self.yt, 'is_running', False):
+                    m = self._pending_mps.get('youtube', 0.0)
+                    is_filtering = m >= threshold
+                    gate_color = "#ff4444" if is_filtering else "#44cc44"
+                    gate_text = "🔴 GATE CLOSED" if is_filtering else "🟢 GATE OPEN"
+                    status_text = f"CONNECTED  |  {gate_text}  |  MPS: {m:.1f}"
+                    self.yt_status.setText(status_text)
+                    self.yt_status.setStyleSheet(f"font-weight: bold; color: {gate_color};")
+
+                twitch_active = self.irc is not None and getattr(self.irc, 'is_running', False)
+                yt_active = self.yt is not None and getattr(self.yt, 'is_running', False)
+                kick_active = self.kick is not None and getattr(self.kick, 'is_running', False)
+                tt_active = self.tiktok is not None and getattr(self.tiktok, 'is_running', False)
+
+                display_mps = max(
+                    (self._pending_mps.get('twitch', 0.0) if twitch_active else 0.0),
+                    (self._pending_mps.get('youtube', 0.0) if yt_active else 0.0),
+                    (self._pending_mps.get('kick', 0.0) if kick_active else 0.0),
+                    (self._pending_mps.get('tiktok', 0.0) if tt_active else 0.0),
+                )
+                self.mps_label.setText(f"MPS: {display_mps:.1f}")
+                self.mps_label.setStyleSheet("color: #888; font-weight: bold;")
+        except Exception:
+            pass
 
     # ===================== UPDATE SYSTEM =====================
     def check_for_updates(self):
