@@ -8,6 +8,7 @@ import os
 # Load project's badges.py explicitly to avoid colliding with the top-level
 # `badges/` assets directory which would make `import badges` pick the
 # directory instead of the helper module.
+import json
 proj_root = os.path.dirname(os.path.abspath(__file__))
 badges_py = os.path.join(proj_root, 'badges.py')
 if os.path.exists(badges_py):
@@ -104,6 +105,12 @@ class ChatOverlay(QWidget):
         self._opacity = opacity
         self._set_html(self._html_content)
 
+    def _debug_log(self, tag, txt):
+        try:
+            print(f"[Overlay] {tag}: {txt[:200]}")
+        except Exception:
+            pass
+
     def set_click_through(self, enabled):
         hwnd = int(self.winId())
         style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
@@ -134,13 +141,13 @@ class ChatOverlay(QWidget):
         font_size = getattr(self, '_font_size', 14)
         opacity = getattr(self, '_opacity', 0.5)
         rgba = f"rgba(0, 0, 0, {int(opacity * 255)})"
-        
         base_html = f"""
         <!DOCTYPE html>
         <html>
         <head>
         <meta charset="utf-8">
         <style>
+            /* Keep body static and allow #messages to scroll so we can hide scrollbar */
             html, body {{
                 background-color: {rgba};
                 color: white;
@@ -149,23 +156,38 @@ class ChatOverlay(QWidget):
                 font-size: {font_size}px;
                 margin: 0;
                 padding: 4px;
+                height: 100%;
                 overflow: hidden;
             }}
             div {{ margin-bottom: 2px; }}
+            #messages {{ padding-bottom: 8px; max-height: 100%; overflow-y: auto; -ms-overflow-style: none; scrollbar-width: none; }}
+            /* Hide webkit scrollbar */
+            #messages::-webkit-scrollbar {{ width: 0px; height: 0px; display: none; }}
             a {{ color: #4da6ff; }}
             img {{ vertical-align: middle; }}
         </style>
         </head>
         <body>
-        {html}
+        <div id="messages">{html}</div>
         </body>
         </html>
         """
         self.chat_display.setHtml(base_html)
 
     def _append_html(self, html):
-        self._html_content += html
-        self._set_html(self._html_content)
+        # Keep the python-side HTML content for lookups, but append to the
+        # live DOM instead of resetting the whole page (prevents scroll jump).
+        wrapped = html
+        self._html_content += wrapped
+        try:
+            js = (
+                "(function(){var m=document.getElementById('messages');"
+                + "if(m) m.insertAdjacentHTML('beforeend'," + json.dumps(wrapped) + ");})();"
+            )
+            self.chat_display.page().runJavaScript(js)
+        except Exception:
+            # Fallback to full re-render if JS append fails
+            self._set_html(self._html_content)
 
     @pyqtSlot(str)
     def add_message(self, html):
@@ -206,6 +228,7 @@ class ChatOverlay(QWidget):
                     html = banner
         except Exception:
             pass
+        self._debug_log('add_message_received', html)
         msg_id = self.next_msg_id
         self.next_msg_id += 1
         
@@ -262,9 +285,17 @@ class ChatOverlay(QWidget):
             self._html_content = ""
             self.message_map.clear()
             self.next_msg_id = 0
-            self._set_html("")
+            try:
+                self.chat_display.page().runJavaScript("var m=document.getElementById('messages'); if(m) m.innerHTML='';")
+            except Exception:
+                self._set_html("")
         else:
-            self.chat_display.page().runJavaScript("window.scrollTo(0, document.body.scrollHeight);")
+            # Scroll the messages container (body is non-scrolling now)
+            js = (
+                "(function(){var m=document.getElementById('messages');"
+                "if(m){m.scrollTop=m.scrollHeight; var last=m.lastElementChild; if(last) last.scrollIntoView();}})();"
+            )
+            self.chat_display.page().runJavaScript(js)
 
     def _insert_link_preview(self, url, title, description):
         if not title or not description:
@@ -281,10 +312,16 @@ class ChatOverlay(QWidget):
     def remove_message(self, msg_id):
         if msg_id not in self.message_map:
             return
+        # Remove from python-side content
         html = self._html_content
         pattern = f'<div id="msg_{msg_id}">[^<]*(?:<[^>]*>[^<]*)*</div>'
         html = re.sub(pattern, '', html, flags=re.DOTALL)
-        self._set_html(html)
+        self._html_content = html
+        try:
+            js = f"var e=document.getElementById('msg_{msg_id}'); if(e) e.remove();"
+            self.chat_display.page().runJavaScript(js)
+        except Exception:
+            self._set_html(self._html_content)
         del self.message_map[msg_id]
 
     def remove_message_by_user(self, username):
@@ -293,7 +330,16 @@ class ChatOverlay(QWidget):
         original_length = len(html)
         html = re.sub(pattern, '', html, flags=re.DOTALL)
         if len(html) != original_length:
-            self._set_html(html)
+            self._html_content = html
+            try:
+                # Best-effort: remove any matching user nodes client-side
+                js = (
+                    "(function(){var msgs=document.querySelectorAll('#messages > div');"
+                    "for(var i=0;i<msgs.length;i++){if(msgs[i].innerText.indexOf("+ json.dumps(username) +")!==-1){msgs[i].remove();}}})();"
+                )
+                self.chat_display.page().runJavaScript(js)
+            except Exception:
+                self._set_html(self._html_content)
 
 
 class LinkPreviewThread(QThread):

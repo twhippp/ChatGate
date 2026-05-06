@@ -8,6 +8,13 @@
 - **Disconnect Button**: Quick way to stop streaming on any platform without closing the app
 - **Link Previews**: Automatically fetches and displays metadata (title, description) for URLs in chat messages
 - **Moderator Message Removal**: Automatically removes messages from overlay when Twitch mods delete them in real-time
+ - **Badges Support**: Local badge icons for moderator/VIP/subscriber
+ - **Channel Points Redeems**:
+ - **/me (ACTION) Formatting**: Properly strip control characters and render `/me` messages in italics.
+ - **Emote Replacement Fixes**: Token-aware, length-sorted regex emote replacement to avoid accidental username→emoji substitutions.
+ - **MPS Throttling**: UI updates for Messages-Per-Second.
+ - **Installer Text Update**: Installer message updated in `ChatGate.nsi` to include the provided release text.
+ - **Connect/Disconnect Fixes**: Prevents the UI from showing "CONNECTED" after the IRC thread has disconnected; emote-loading status gated on thread activity.
 
 ### Platform Support
 - **Kick**: Channel input, verified user filtering (Always/Normal/Never), MPS-based filtering, auto-reconnection

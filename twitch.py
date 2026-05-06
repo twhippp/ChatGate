@@ -212,6 +212,12 @@ TWITCH_NATIVE_GLOBAL_EMOTES = {
     "PagChomp": "3020396",
 }
 
+# Words that commonly start questions
+QUESTION_WORDS = {
+    'who','what','when','where','why','how','is','are','am','do','does','did',
+    'can','could','would','will','should','which','whom','whose'
+}
+
 def _download_global_emotes_from_twitchemotes():
     global TWITCH_GLOBAL_EMOTES
     
@@ -402,6 +408,14 @@ class IRCThread(QThread):
             if rule == "Never" and role_result is None: role_result = False
         if role_result is False: return False
         if not is_filtering: return True
+        # New customization: allow messages based on min_words or question detection
+        min_words = int(f.get('min_words', 0) or 0)
+        allow_questions = bool(f.get('allow_questions', True))
+        tokens = re.findall(r"\b\w+\b", msg_lower)
+        if allow_questions and (tokens and tokens[0] in QUESTION_WORDS or '?' in msg_lower):
+            return True
+        if min_words > 0 and len(tokens) >= min_words:
+            return True
         return self._is_substantive(msg_lower)
  
     LOW_VALUE_EXACT = {
@@ -435,10 +449,32 @@ class IRCThread(QThread):
         if "sub"         in roles: parts.append("<span style='color:#FFD700;font-weight:bold'>[S]</span>")
         return " ".join(parts) + (" " if parts else "")
  
-    def _handle_usernotice(self, tags):
+    def _handle_usernotice(self, tags, rest=None):
         msg_id  = tags.get("msg-id", "")
         user    = tags.get("display-name", tags.get("login", "Someone"))
         sys_msg = tags.get("system-msg", "").replace("\\s", " ")
+        # Extract any trailing message text that may follow the USERNOTICE command
+        content = ""
+        try:
+            if rest:
+                m = re.search(r'USERNOTICE[^:]*:(.*)$', rest)
+                if m:
+                    content = m.group(1).strip()
+                elif ":" in rest:
+                    content = rest.split(":", 1)[1].strip()
+            # Fallbacks from tags if present
+            if not content:
+                content = tags.get("msg-param-message", "") or tags.get("source-msg", "")
+            if content:
+                # Replace Twitch-style escaped spaces and HTML-escape sequences
+                content = content.replace("\\s", " ")
+                try:
+                    import html as _html
+                    content = _html.unescape(content)
+                except Exception:
+                    pass
+        except Exception:
+            content = ""
  
         if msg_id == "raid" and self.event_flags.get("show_raids"):
             return self._fmt_raid(user, tags.get("msg-param-viewerCount", "?"))
@@ -451,26 +487,41 @@ class IRCThread(QThread):
         if msg_id in ("submysterygift", "standardpayforward", "communitypayforward") \
                 and self.event_flags.get("show_subs"):
             return self._fmt_subgift_bomb(user, tags.get("msg-param-mass-gift-count", "?"))
-        if msg_id == "announcement" and self.event_flags.get("show_announcements"):
+        # Handle direct announcements and shared-chat notices that reference an announcement
+        # Handle announcements; prefer explicit content from the USERNOTICE payload
+        if (msg_id == "announcement" or tags.get("source-msg-id", "") == "announcement") and self.event_flags.get("show_announcements"):
             color = tags.get("msg-param-color", "PRIMARY")
-            return self._fmt_announcement(user, sys_msg, color) if sys_msg else None
+            ann_text = content or sys_msg or tags.get("source-msg", "") or "Announcement"
+            return self._fmt_announcement(user, ann_text, color)
         if msg_id == "watch-streak" and self.event_flags.get("show_watch_streaks"):
             return self._fmt_watch_streak(user, tags.get("msg-param-streak-months", "?"))
         # Channel Points / Reward redeemed
         # Support multiple reward msg-id variants (e.g., custom-reward-redeemed)
-        if msg_id and "reward" in msg_id:
-            try:
-                reward = tags.get("msg-param-reward-title", "Reward")
-                cost = tags.get("msg-param-cost", "")
-                # Emit structured redeem event for the UI to render
+        try:
+            reward_title = tags.get("msg-param-reward-title")
+            cost = tags.get("msg-param-cost", "")
+            # Also consider source-msg or trailing content that mentions 'redeemed'
+            lower_content = (content or "").lower()
+            is_reward_msgid = bool(msg_id and "reward" in msg_id)
+            is_reward_tag = bool(reward_title)
+            is_reward_text = "redeemed" in lower_content or "reward" in lower_content
+            if is_reward_msgid or is_reward_tag or is_reward_text or tags.get("source-msg-id", "").lower().find("reward") != -1:
+                # Prefer explicit tag title, else try to extract from content
+                reward = reward_title or ""
+                if not reward and content:
+                    m = re.search(r"(?:redeemed|reward)[:\s]+(.+)$", content, re.IGNORECASE)
+                    if m:
+                        reward = m.group(1).strip()
+                if not reward:
+                    reward = "Reward"
                 try:
-                    print(f"[Twitch] Redeem received: user={user!r}, reward={reward!r}, cost={cost!r}")
+                    print(f"[Twitch] Redeem received: user={user!r}, reward={reward!r}, cost={cost!r}, source_msgid={tags.get('source-msg-id')}")
                     self.redeem.emit(user, reward, cost)
                 except Exception:
                     pass
                 return None
-            except Exception:
-                return None
+        except Exception:
+            pass
         return None
  
     def _download_channel_emotes(self, channel_name):
@@ -536,7 +587,12 @@ class IRCThread(QThread):
  
                     if "USERNOTICE" in rest:
                         print(f"[Twitch USERNOTICE] msg-id={tags.get('msg-id')} tags={tags}")
-                        html = self._handle_usernotice(tags)
+                        # Extra debug: detect reward-related tags
+                        if tags.get('msg-id') and 'reward' in tags.get('msg-id'):
+                            print(f"[Twitch DEBUG] USERNOTICE indicates reward msg-id={tags.get('msg-id')}")
+                        if tags.get('msg-param-reward-title'):
+                            print(f"[Twitch DEBUG] USERNOTICE reward title={tags.get('msg-param-reward-title')}")
+                        html = self._handle_usernotice(tags, rest)
                         if html: self.message.emit(html)
                         continue
  

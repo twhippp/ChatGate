@@ -9,6 +9,7 @@ Date: April 2026
 import time
 import threading
 import logging
+import re
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -54,6 +55,14 @@ class TikTokThread(QThread):
         if is_filtering:
             for word in f.get("volume_block_words", []):
                 if word.lower() in msg_lower: return False
+            # Customization: allow by min_words or question detection
+            min_words = int(f.get('min_words', 0) or 0)
+            allow_questions = bool(f.get('allow_questions', True))
+            tokens = re.findall(r"\b\w+\b", msg_lower)
+            if allow_questions and (tokens and tokens[0] in {'who','what','when','where','why','how','is','are','do','does','did','can','could','would','will','should'} or '?' in msg_lower):
+                return True
+            if min_words > 0 and len(tokens) >= min_words:
+                return True
         if is_follower:
             if self.bypass_member == "Always": return True
             if self.bypass_member == "Never":  return False

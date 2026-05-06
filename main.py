@@ -260,6 +260,8 @@ SETTINGS_DEFAULTS = {
     "show_watch_streaks":  True,
     "launch_with_obs":     False,
     "show_link_previews":  True,
+    "min_words": 0,
+    "allow_questions": True,
 }
 
 def migrate_settings(raw):
@@ -565,6 +567,8 @@ class ChatGateMain(QWidget):
             "user_whitelist":     self.user_whitelist.get_items(),
             "user_blacklist":     self.user_blacklist.get_items(),
             "show_link_previews": self.show_link_previews_check.isChecked(),
+            "min_words":          self.min_words_spin.value() if hasattr(self, 'min_words_spin') else self.settings.get('min_words', 0),
+            "allow_questions":    self.allow_questions_check.isChecked() if hasattr(self, 'allow_questions_check') else self.settings.get('allow_questions', True),
             **self._get_event_flags(),
         }
         save_settings_to_file(data)
@@ -583,6 +587,8 @@ class ChatGateMain(QWidget):
             "volume_block_words": self.volume_block_list.get_items(),
             "user_whitelist":     self.user_whitelist.get_items(),
             "user_blacklist":     self.user_blacklist.get_items(),
+            "min_words":          self.min_words_spin.value() if hasattr(self, 'min_words_spin') else self.settings.get('min_words', 0),
+            "allow_questions":    self.allow_questions_check.isChecked() if hasattr(self, 'allow_questions_check') else self.settings.get('allow_questions', True),
         }
 
     def apply_theme(self, accent=None):
@@ -722,7 +728,7 @@ class ChatGateMain(QWidget):
         self.tabs.addTab(self._build_youtube_tab(), "YouTube")
         self.tabs.addTab(self._build_kick_tab(),    "Kick")
         self.tabs.addTab(self._build_tiktok_tab(),  "TikTok")
-        self.tabs.addTab(self._build_filters_tab(), "Filters")
+        self.tabs.addTab(self._build_customize_tab(), "Customize")
         layout.addWidget(self.tabs)
 
         layout.addWidget(self._hline())
@@ -1063,12 +1069,38 @@ class ChatGateMain(QWidget):
         
         return tab
 
-    def _build_filters_tab(self):
+    def _build_customize_tab(self):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(10)
         accent = self._current_accent
+
+        # Customize controls: minimum words and question passthrough
+        h = QHBoxLayout()
+        h.addWidget(QLabel("<b>MESSAGE CUSTOMIZATION</b>"))
+        h.addWidget(make_tooltip_btn(
+            "Controls for message-length gating and question passthrough."))
+        h.addStretch()
+        lay.addLayout(h)
+
+        row = QHBoxLayout()
+        self.min_words_spin = QSpinBox()
+        self.min_words_spin.setRange(0, 50)
+        self.min_words_spin.setValue(self.settings.get("min_words", 0))
+        self.min_words_spin.valueChanged.connect(self.save_settings)
+        row.addWidget(QLabel("Min words:"))
+        row.addWidget(self.min_words_spin)
+        row.addWidget(make_tooltip_btn(
+            "Minimum number of words a message must have to bypass the gate."))
+        row.addStretch()
+        lay.addLayout(row)
+
+        self.allow_questions_check = QCheckBox("Allow questions through (start with question word or contain '?')")
+        self.allow_questions_check.setChecked(self.settings.get("allow_questions", True))
+        self.allow_questions_check.stateChanged.connect(self.save_settings)
+        lay.addWidget(self.allow_questions_check)
+        lay.addWidget(self._hline())
 
         for header_text, tip, attr, setting_key in [
             ("<b>ALWAYS BLOCK WORDS</b>",
@@ -1162,8 +1194,9 @@ class ChatGateMain(QWidget):
         self.irc.message.connect(self.overlay.add_message)
         try:
             self.irc.redeem.connect(self.overlay.add_redeem)
-        except Exception:
-            pass
+            print("[Main] Connected IRC redeem signal to overlay.add_redeem")
+        except Exception as e:
+            print(f"[Main] Failed to connect redeem signal: {e}")
         self.irc.stats_update.connect(lambda m, f: self._update_stats(m, f, "twitch"))
         self.irc.status_msg.connect(lambda s: self.twitch_status.setText(s.upper()))
         self.irc.mod_delete.connect(lambda user: self.overlay.remove_message_by_user(user))

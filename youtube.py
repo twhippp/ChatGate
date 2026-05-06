@@ -124,7 +124,15 @@ class YouTubeThread(QThread):
                 return True
             if self.bypass_member == "Never":  
                 return False
-        if is_filtering: 
+        if is_filtering:
+            # Respect customization: min_words and allow_questions
+            min_words = int(f.get('min_words', 0) or 0)
+            allow_questions = bool(f.get('allow_questions', True))
+            tokens = re.findall(r"\b\w+\b", msg.lower())
+            if allow_questions and (tokens and tokens[0] in { 'who','what','when','where','why','how','is','are','do','does','did','can','could','would','will','should' } or '?' in msg):
+                return True
+            if min_words > 0 and len(tokens) >= min_words:
+                return True
             return False
         return True
 
