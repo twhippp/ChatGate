@@ -32,12 +32,13 @@ class TikTokThread(QThread):
 
     CHAT_RATE_WINDOW = 5.0
 
-    def __init__(self, handle, threshold, bypass_member, filters):
+    def __init__(self, handle, threshold, bypass_member, filters, platform_badge_html=None):
         super().__init__()
         self.handle        = handle.strip().lstrip("@")
         self.threshold     = threshold
         self.bypass_member = bypass_member
         self.filters       = filters
+        self._platform_badge_html = platform_badge_html or (lambda p: "")
         self.msg_times     = deque()
         self.is_running    = True
 
@@ -147,9 +148,10 @@ class TikTokThread(QThread):
                 if not msg: return
                 if self._should_show(user, msg, is_follower, 0):
                     color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
+                    badge = self._platform_badge_html('tiktok') if hasattr(self, '_platform_badge_html') else ""
+                    # Ensure there's no stray leading tab/whitespace before username
                     self.message.emit(
-                        f"<span style='color:#000000;font-weight:bold'>[TT]</span> "
-                        f"<span style='color:{color}'><b>{user}</b></span>: {msg}")
+                        f"{badge}<span style='color:{color}'><b>{user}</b></span>: {msg}")
 
             async def on_like(event):
                 if not self.is_running: return
@@ -162,9 +164,9 @@ class TikTokThread(QThread):
                     msg = "liked"
                 if self._should_show(user, msg, False, 0):
                     color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
+                    badge = self._platform_badge_html('tiktok') if hasattr(self, '_platform_badge_html') else ""
                     self.message.emit(
-                        f"<span style='color:#000000;font-weight:bold'>[TT]</span> "
-                        f"<span style='color:{color}'><b>{user}</b></span> {msg}")
+                        f"{badge}<span style='color:{color}'><b>{user}</b></span> {msg}")
 
             async def on_gift(event):
                 if not self.is_running: return
@@ -174,27 +176,27 @@ class TikTokThread(QThread):
                 gift_name = event.gift.name if event.gift else "gift"
                 if self._should_show(user, gift_name, False, 0):
                     color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
+                    badge = self._platform_badge_html('tiktok') if hasattr(self, '_platform_badge_html') else ""
                     self.message.emit(
-                        f"<span style='color:#000000;font-weight:bold'>[TT]</span> "
-                        f"<span style='color:{color}'><b>{user}</b></span> sent {gift_name}")
+                        f"{badge}<span style='color:{color}'><b>{user}</b></span> sent {gift_name}")
 
             async def on_follow(event):
                 if not self.is_running: return
                 user = event.user.unique_id
                 if self._should_show(user, "followed", False, 0):
                     color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
+                    badge = self._platform_badge_html('tiktok') if hasattr(self, '_platform_badge_html') else ""
                     self.message.emit(
-                        f"<span style='color:#000000;font-weight:bold'>[TT]</span> "
-                        f"<span style='color:{color}'><b>{user}</b></span> followed")
+                        f"{badge}<span style='color:{color}'><b>{user}</b></span> followed")
 
             async def on_share(event):
                 if not self.is_running: return
                 user = event.user.unique_id
                 if self._should_show(user, "shared", False, 0):
                     color = f"hsl({abs(hash(user)) % 360}, 80%, 75%)"
+                    badge = self._platform_badge_html('tiktok') if hasattr(self, '_platform_badge_html') else ""
                     self.message.emit(
-                        f"<span style='color:#000000;font-weight:bold'>[TT]</span> "
-                        f"<span style='color:{color}'><b>{user}</b></span> shared the live")
+                        f"{badge}<span style='color:{color}'><b>{user}</b></span> shared the live")
 
             client.add_listener(ConnectEvent, on_connect)
             client.add_listener(DisconnectEvent, on_disconnect)

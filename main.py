@@ -1362,7 +1362,8 @@ class ChatGateMain(QWidget):
             self._last_tiktok_handle,
             self.mps_spin.value(),
             self.bp_tiktok_follower.currentText(),
-            self._get_filters())
+            self._get_filters(),
+            _platform_badge_html)
         self.tiktok.message.connect(self.overlay.add_message)
         self.tiktok.stats_update.connect(lambda m, f: self._update_stats(m, f, "tiktok"))
         self.tiktok.status_msg.connect(lambda s: self.tiktok_status.setText(s.upper()))
